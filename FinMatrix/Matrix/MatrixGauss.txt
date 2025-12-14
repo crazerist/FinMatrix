@@ -1,0 +1,1844 @@
+(*
+  Copyright 2024 Zhengpu Shi
+  This file is part of FinMatrix. It is distributed under the MIT
+  "expat license". You should have recieved a LICENSE file with it.
+
+  purpose   : Gauss elimination of matrix
+  author    : Zhengpu Shi
+  date      : 2023.12
+
+  remark    :
+  1. Two stages
+     First stage, we use a simple case of `n × n` matrix
+     Second stage, we should consider the case of `m × n` matrix
+
+  2. learn "fold_left" and "fold_right"
+
+     fold_left  f [b1;b2;b3] a = f (f (f a b1) b2) b3
+     Folding start from newest added element.
+
+     fold_right f a [b1;b2;b3] = f b1 (f b2 (f b3 a))
+     Folding start from oldest added element.
+ *)
+
+Require Export Matrix.
+
+Generalizable Variable tA Aadd Azero Aopp Amul Aone Ainv.
+
+(** fold_left f (map g l) a = fold_left (fun x y => f x (g y)) l a *)
+Lemma fold_left_map :
+  forall {tA tB} (l : list tB) (f : tA -> tA -> tA) (g : tB -> tA) a,
+    fold_left f (map g l) a = fold_left (fun x y => f x (g y)) l a.
+Proof.
+  intros tA tB l. induction l; intros; simpl. auto.
+  rewrite IHl. auto.
+Qed.
+
+(** fold_right f a (map g l) = fold_right (fun x y => f (g x) y) a l *)
+Lemma fold_right_map :
+  forall {tA tB} (l : list tB) (f : tA -> tA -> tA) (g : tB -> tA) a,
+    fold_right f a (map g l) = fold_right (fun x y => f (g x) y) a l.
+Proof.
+  intros tA tB l. induction l; intros; simpl. auto.
+  rewrite IHl. auto.
+Qed.
+
+
+(* ############################################################################ *)
+(** * Gauss elimination. *)
+Section GaussElim.
+  Context `{HField : Field} `{HAeqDec : Dec _ (@eq tA)}.
+  Add Field field_inst : (make_field_theory HField).
+
+  Notation "0" := Azero : A_scope.
+  Notation "1" := Aone : A_scope.
+  Infix "+" := Aadd : A_scope.
+  Notation "- a" := (Aopp a) : A_scope.
+  Infix "*" := Amul : A_scope.
+  Notation "/ a" := (Ainv a) : A_scope.
+  Infix "/" := (fun a b => a * / b) : A_scope.
+  
+  Notation mat r c := (mat tA r c).
+  Notation smat n := (smat tA n).
+  Notation mat1 := (@mat1 _ Azero Aone).
+  Notation madd := (@madd _ Aadd).
+  Infix "+" := madd : mat_scope.
+  Notation mmul := (@mmul _ Aadd Azero Amul).
+  Infix "*" := mmul : mat_scope.
+  Notation mrowSwap := (@mrowSwap tA).
+  Notation mrowScale := (@mrowScale _ Amul).
+  Notation mrowAdd := (@mrowAdd _ Aadd Amul).
+  Notation mrowSwapM := (@mrowSwapM _ 0 1 _).
+  Notation mrowScaleM := (@mrowScaleM _ 0 1 _).
+  Notation mrowAddM := (@mrowAddM _ Aadd 0 1 _).
+  Notation mrow := (@mrow _ Azero).
+
+
+  (* ======================================================================= *)
+  (** ** 行变换 *)
+  
+  (* 为避免逆矩阵计算时的大量计算，使用抽象表示，可提高计算效率 *)
+  Inductive RowOp {n} :=
+  | ROnop
+  | ROswap (i j : 'I_(S n))
+  | ROscale (i : 'I_(S n)) (c : tA)
+  | ROadd (i j : 'I_(S n)) (c : tA).
+
+  (** 行变换列表转换为矩阵 *)
+  Definition rowOps2mat {n} (l : list (@RowOp n)) : smat (S n) :=
+    fold_right (fun op M =>
+    match op with
+    | ROnop => M
+    | ROswap i j => mrowSwap i j M
+    | ROscale i c => mrowScale i c M
+    | ROadd i j c => mrowAdd i j c M
+     end) mat1 l.
+
+  (** rowOps2mat (l1 ++ l2) = rowOps2mat l1 * rowOps2mat l2 *)
+    Theorem rowOps2mat_app : forall {n} (l1 l2 : list (@RowOp n)),
+      rowOps2mat (l1 ++ l2) = rowOps2mat l1 * rowOps2mat l2.
+    Proof.
+    intros. induction l1; intros; simpl.
+    - rewrite mmul_1_l; auto.
+    - destruct a; auto.
+      + rewrite IHl1. rewrite mrowSwap_mmul; auto.
+      + rewrite IHl1. rewrite mrowScale_mmul; auto.
+      + rewrite IHl1. rewrite mrowAdd_mmul; auto.
+  Qed.
+
+  Lemma rowOps2mat_cons : forall {n} (a : @RowOp n) (l : list (@RowOp n)),
+    rowOps2mat (a :: l) = rowOps2mat [a] * rowOps2mat l.
+  Proof.
+    intros. replace (a :: l) with ([a] ++ l)%list by auto.
+    apply rowOps2mat_app.
+  Qed.
+
+
+  (* ======================================================================= *)
+  (** ** 行变换的逆过程 *)
+
+  (** 行变换列表转换为反作用的矩阵。即，rowOps2mat的逆矩阵 *)
+  Definition rowOps2matInv {n} (l : list (@RowOp n)) : smat (S n) :=
+    fold_left (fun M op =>
+    match op with
+    | ROnop => M
+    | ROswap i j => mrowSwap i j M
+    | ROscale i c => mrowScale i (/c) M
+    | ROadd i j c => mrowAdd i j (-c) M
+    end) l mat1.
+
+  (* 为证明 rowOps2matInv_app，引入辅助定义和引理，主要思想是：
+     将 rowOps2mat 和 rowOps2matInv 转换为矩阵乘法 *)
+  
+    
+    (* Valid RowOp *)
+  Definition roValid {n} (op : @RowOp n) : Prop :=
+    match op with
+    | ROnop => True
+    | ROswap i j => True
+    | ROscale i c => c <> 0
+    | ROadd i j c => i <> j
+    end.
+
+    (* op => matrix of op *)
+  Definition ro2mat {n} (op : @RowOp n) : smat (S n) :=
+    match op with
+    | ROnop => mat1
+    | ROswap i j => mrowSwapM i j
+    | ROscale i c => mrowScaleM i c
+    | ROadd i j c => mrowAddM i j c
+    end.
+
+    (* op => matrix of inverse opeation *)
+  Definition ro2matInv {n} (op : @RowOp n) : smat (S n) :=
+    match op with
+    | ROnop => mat1
+    | ROswap i j => mrowSwapM i j
+    | ROscale i c => mrowScaleM i (/c)
+    | ROadd i j c => mrowAddM i j (-c)
+    end.
+
+  Lemma mmul_ro2mat_l : forall n (op : RowOp) (M : smat (S n)),
+    ro2mat op * M =
+    match op with
+    | ROnop => M
+    | ROswap i j => mrowSwap i j M
+    | ROscale i c => mrowScale i c M
+    | ROadd i j c => mrowAdd i j c M
+    end.
+  Proof.
+    intros. unfold ro2mat. destruct op.
+    - apply mmul_1_l.
+    - rewrite mrowSwap_eq; auto.
+    - rewrite mrowScale_eq; auto.
+    - rewrite mrowAdd_eq; auto.
+  Qed.
+
+  Lemma mmul_ro2matInv_l : forall n (op : RowOp) (M : smat (S n)),
+    ro2matInv op * M =
+    match op with
+    | ROnop => M
+    | ROswap i j => mrowSwap i j M
+    | ROscale i c => mrowScale i (/ c) M
+    | ROadd i j c => mrowAdd i j (- c) M
+      end.
+  Proof.
+    intros.  unfold ro2matInv. destruct op.
+    - apply mmul_1_l.
+    - rewrite mrowSwap_eq; auto.
+    - rewrite mrowScale_eq; auto.
+    - rewrite mrowAdd_eq; auto.
+  Qed.
+    
+  Lemma mmul_ro2mat_ro2matInv : forall {n} (op : @RowOp n),
+    roValid op -> ro2mat op * ro2matInv op = mat1.
+  Proof.
+    intros. hnf in H. destruct op; simpl.
+    - rewrite mmul_1_l; auto.
+    - rewrite mmul_mrowSwapM_mrowSwapM; auto.
+    - rewrite mmul_mrowScaleM_mrowScaleM; auto.
+    - rewrite mmul_mrowAddM_mrowAddM; auto.
+  Qed.
+    
+  Lemma mmul_ro2matInv_ro2mat : forall {n} (op : @RowOp n),
+    roValid op -> ro2matInv op * ro2mat op = mat1.
+  Proof.
+    intros. hnf in H. destruct op; simpl.
+    - rewrite mmul_1_l; auto.
+    - rewrite mmul_mrowSwapM_mrowSwapM; auto.
+    - replace c with (/ / c) at 2.
+      rewrite mmul_mrowScaleM_mrowScaleM; auto.
+      apply field_inv_neq0_iff; auto.
+      rewrite field_inv_inv; auto.
+    - replace c with (- - c) at 2 by field.
+      rewrite mmul_mrowAddM_mrowAddM; auto.
+  Qed.
+
+  (** rowOps2mat has an equivalent form with matrix multiplication. *)
+  (*     Note that, we won't use this definition to improve performance *)
+  Lemma rowOps2mat_eq : forall {n} (l : list (@RowOp n)),
+    rowOps2mat l = fold_right mmul mat1 (map ro2mat l).
+  Proof.
+    intros. unfold rowOps2mat. rewrite fold_right_map. f_equal.
+    extensionality M. extensionality op. rewrite mmul_ro2mat_l. auto.
+  Qed.
+
+  (** rowOps2matInv has an equivalent form with matrix multiplication. *)
+  (*     Note that, we won't use this definition to improve performance *)
+  Lemma rowOps2matInv_eq : forall {n} (l : list (@RowOp n)),
+    rowOps2matInv l = fold_left (fun x y => y * x) (map ro2matInv l) mat1.
+  Proof.
+    intros. unfold rowOps2matInv. rewrite fold_left_map. f_equal.
+    extensionality M. extensionality op. rewrite mmul_ro2matInv_l. auto.
+  Qed.
+
+  (** rowOps2matInv l * rowOps2mat l = mat1 *)
+  Lemma mmul_rowOps2matInv_rowOps2mat_eq1 : forall {n} (l : list (@RowOp n)),
+      Forall roValid l -> rowOps2matInv l * rowOps2mat l = mat1.
+  Proof.
+    intros.
+    (* convert to mmul *)
+    rewrite rowOps2mat_eq. rewrite rowOps2matInv_eq. rewrite <- fold_left_rev_right.
+    (* If we assume l = a1;a2;a3, and denoted that
+            map ro2matInv l       = a1';a2';a3'
+            rev (map ro2matInv l) = a3';a2';a1'
+            map ro2mat l          = a1;a2;a3,
+       then the Goal is: (a3'*a2'*a1'*mat1) * (a1*a2*a3*mat1) = mat1 *)
+    induction l; simpl. apply mmul_1_l.
+    (* Convert 'ro2matInv a' to second items of matrix multiplication *)
+    replace (fold_right mmul mat1 (rev (map ro2matInv l) ++ [ro2matInv a]))
+      with ((fold_right mmul mat1 (rev (map ro2matInv l))) * (ro2matInv a)).
+    2: {
+      (* (a3'*a2'*a1'*mat1)*a' = (a3'*a2'*a1'*a')*mat1 *)
+      remember (rev (map ro2matInv l)). remember (ro2matInv a).
+      clear Heqv IHl Heql0.
+      induction l0; simpl. rewrite mmul_1_l, mmul_1_r; auto.
+      rewrite mmul_assoc. f_equal. rewrite IHl0. auto. }
+    (* Now, eliminate the middle two items *)
+    rewrite mmul_assoc. rewrite <- (mmul_assoc (ro2matInv a)).
+    rewrite mmul_ro2matInv_ro2mat. rewrite mmul_1_l. apply IHl.
+    inversion H; auto. inversion H; auto.
+  Qed.
+
+  (** rowOps2mat l * rowOps2matInv l = mat1 *)
+  Lemma mmul_rowOps2mat_rowOps2matInv_eq1 : forall {n} (l : list (@RowOp n)),
+      Forall roValid l -> rowOps2mat l * rowOps2matInv l = mat1.
+  Proof.
+    intros.
+    (* convert to mmul *)
+    rewrite rowOps2mat_eq. rewrite rowOps2matInv_eq. rewrite <- fold_left_rev_right.
+    (* If we assume l = a1;a2;a3, and denoted that
+            map ro2matInv l       = a1';a2';a3'
+            rev (map ro2matInv l) = a3';a2';a1'
+            map ro2mat l          = a1;a2;a3,
+       then the Goal is: (a1*a2*a3*mat1) (a3'*a2'*a1'*mat1) = mat1 *)
+    induction l; simpl. apply mmul_1_l.
+    (* Convert 'ro2matInv a' to last items of matrix multiplication *)
+    replace (fold_right mmul mat1 (rev (map ro2matInv l) ++ [ro2matInv a]))
+      with ((fold_right mmul mat1 (rev (map ro2matInv l))) * (ro2matInv a)).
+    2: {
+      (* (a3'*a2'*a1'*mat1)*a' = (a3'*a2'*a1'*a')*mat1 *)
+      remember (rev (map ro2matInv l)). remember (ro2matInv a).
+      clear Heqv IHl Heql0.
+      induction l0; simpl. rewrite mmul_1_l, mmul_1_r; auto.
+      rewrite mmul_assoc. f_equal. rewrite IHl0. auto. }
+    (* Now, eliminate the middle two items *)
+    rewrite <- !mmul_assoc. rewrite (mmul_assoc (ro2mat a)). rewrite IHl.
+    rewrite mmul_1_r. rewrite mmul_ro2mat_ro2matInv. auto.
+    inversion H; auto. inversion H; auto.
+  Qed.
+
+  (** rowOps2mat l * M = N -> rowOps2matInv l * N = M *)
+  Lemma rowOps2mat_imply_rowOps2matInv : forall {n} (l : list RowOp) (M N : smat (S n)),
+      Forall roValid l -> (rowOps2mat l) * M = N -> (rowOps2matInv l) * N = M.
+  Proof.
+    intros. rewrite <- H0. rewrite <- mmul_assoc.
+    rewrite mmul_rowOps2matInv_rowOps2mat_eq1; auto. rewrite mmul_1_l. auto.
+  Qed.
+
+  (** rowOps2matInv l * M = N -> rowOps2mat l * N = M *)
+  Lemma rowOps2matInv_imply_rowOps2mat : forall {n} (l : list RowOp) (M N : smat (S n)),
+      Forall roValid l -> (rowOps2matInv l) * M = N -> (rowOps2mat l) * N = M.
+  Proof.
+    intros. rewrite <- H0. rewrite <- mmul_assoc.
+    rewrite mmul_rowOps2mat_rowOps2matInv_eq1; auto. rewrite mmul_1_l. auto.
+  Qed.
+
+  (** (l1 * l2 * ... * ln * 1) * a = l1 * l2 * ... * ln * (a * 1) *)
+  Lemma fold_right_mmul_rebase : forall {n} (l : list (smat n)) (a : smat n),
+      fold_right mmul mat1 l * a = fold_right mmul a l.
+  Proof.
+    intros n. induction l; intros; simpl. rewrite mmul_1_l; auto.
+    rewrite mmul_assoc. rewrite IHl. auto.
+  Qed.
+
+  (** rowOps2matInv (l1 ++ l2) = rowOps2matInv l2 * rowOps2matInv l1 *)
+  Theorem rowOps2matInv_app : forall {n} (l1 l2 : list (@RowOp n)),
+      rowOps2matInv (l1 ++ l2) = rowOps2matInv l2 * rowOps2matInv l1.
+  Proof.
+    intros n. unfold rowOps2matInv.
+    remember (fun (M : smat (S n)) (op : RowOp) =>
+                match op with
+                | ROnop => M
+                | ROswap i j => mrowSwap i j M
+                | ROscale i c => mrowScale i (/ c) M
+                | ROadd i j c => mrowAdd i j (- c) M
+                end) as f.
+    (* by induction on l2 is easier *)
+    intros l1 l2. revert l1. induction l2.
+    - intros. simpl. rewrite app_nil_r. rewrite mmul_1_l; auto.
+    - intros. simpl.
+      replace (l1 ++ a :: l2)%list with ((l1 ++ [a]) ++ l2)%list;
+        [|rewrite <- app_assoc; auto].
+      rewrite IHl2. rewrite fold_left_app; simpl.
+      (* Assume: l1 = [b1;b2], l2 = [c1;c2], then
+         l1++l2 = [b1;b2;c1;c2]
+         f mat1 a                        = Ta*1
+         fold_left f l2 mat1             = Tc2*Tc1*1
+         fold_left f l2 (f mat1 a)       = Tc2*Tc1*Ta*1
+         fold_left f l1 mat1             = Tb2*Tb1*1
+         f (fold_left f l1 mat1) a       = Ta*Tb2*Tb1*1
+      The goal is:
+         (Tc2*Tc1*1)*(Ta*Tb2*Tb1*1) = (Tc2*Tc1*Ta*1)*(Tb2*Tb1*1) *)
+      replace (f (fold_left f l1 mat1) a)
+        with (ro2matInv a * (fold_left f l1 mat1)).
+      2:{ rewrite mmul_ro2matInv_l. rewrite Heqf; auto. }
+      replace (fold_left f l2 (f mat1 a))
+        with ((fold_left f l2 mat1) * ro2matInv a).
+      2:{
+        (* a difficulty proof *)
+        clear IHl2. rename l2 into l. clear l1.
+        assert (f = fun (M : smat (S n)) op => ro2matInv op * M).
+        { rewrite Heqf. unfold ro2matInv.
+          extensionality M. extensionality op. destruct op.
+          rewrite mmul_1_l; auto.
+          rewrite mrowSwap_eq; auto.
+          rewrite mrowScale_eq; auto.
+          rewrite mrowAdd_eq; auto. }
+        (* op ==> 矩阵乘法 *)
+        rewrite H.
+        rewrite <- (fold_left_map l (fun x y => y * x) ro2matInv).
+        rewrite <- (fold_left_map l (fun x y => y * x) ro2matInv).
+        (* “交换的矩阵乘法” ==> 正常的矩阵转换 *)
+        rewrite <- fold_left_rev_right.
+        rewrite <- fold_left_rev_right.
+        remember (rev (map ro2matInv l)) as L.
+        rewrite mmul_1_r.
+        remember (ro2matInv a) as b.
+        (* (l1*l2*l3*1)*b = l1*l2*l3*(b*1) *)
+        rewrite fold_right_mmul_rebase. auto. }
+      rewrite mmul_assoc. auto.
+  Qed.
+
+    (* ======================================================================= *)
+  (** ** 某列的第一个非零元的行号 *)
+
+  (** 第 j 列的后 x 个元素中的第 1 个非零元的行号。
+      eg: 当 x 是`维数` 时，则从第 0 行开始往下查找。 *)
+  Fixpoint getcolPivot {r c} (M : mat (S r) (S c)) (x : nat) (j : 'I_(S c))
+    : option ('I_(S r)) :=
+    match x with
+    | O => None
+    | S x' =>
+        (* x的递归顺序：   x,    x-1, ... ,    1, (0)
+           S n-x的顺序：Sn-x, Sn-x+1, ... , Sn-1, (Sn) *)
+        if Aeqdec (M #(S r - x) j) 0
+        then getcolPivot M x' j
+        else Some #(S r - x)
+    end.
+
+  Lemma getcolPivot_imply_nonzero :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      getcolPivot M x j = Some i -> M i j <> 0.
+  Proof.
+    induction x; intros.
+    - simpl in H. easy.
+    - simpl in H. destruct (Aeqdec (M #(r - x) j) 0).
+      + apply IHx in H; auto.
+      + inv H. auto.
+  Qed.
+  
+  (* 非零元行号 r < S n *)
+  Lemma getcolPivot_max :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      getcolPivot M x j = Some i -> i < S r.
+  Proof.
+    induction x; intros.
+    - simpl in H. easy.
+    - simpl in H. destruct Aeqdec as [E|E].
+      + apply IHx in H. auto.
+      + inversion H. rewrite fin2nat_nat2finS; lia.
+  Qed.
+  
+  (* 非零元行号 r >= S n - x *)
+  Lemma getcolPivot_min :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      getcolPivot M x j = Some i -> i >= S r - x.
+  Proof.
+    induction x; intros.
+    - simpl in H. easy.
+    - simpl in H. destruct Aeqdec as [E|E].
+      + apply IHx in H. lia.
+      + inversion H. rewrite fin2nat_nat2finS; lia.
+  Qed.
+
+  Lemma getcolPivot_Some  :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (a : 'I_(S r)) (j : 'I_(S c)),
+      getcolPivot M x j = Some a <-> 
+        (M.[a].[j] <> 0 /\  (S r - x) <= a /\
+        (forall (i : 'I_(S r)), (S r -  x) <= i -> i < a ->  M.[i].[j] = 0)).
+  Proof.
+    induction x; intros; split; intros.
+    - simpl in H. inv H.
+    - destruct H as [H [H1 H2]]. pose proof (fin2nat_lt a). lia.
+    - simpl in H. destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + specialize IHx with (M:=M) (a:=a) (j:=j). rewrite IHx in H.
+        destruct H as [H [H1 H2]]. split;[|split]; auto; try lia.
+        intros. replace (S r - S x) with (r - x) in H0 by lia.
+        destruct (i ??= r - x) as [E'|E'].
+        * rewrite <- E' in E. rewrite nat2finS_fin2nat in E. auto.
+        * apply H2; fin.
+      + inv H. split;[|split]; fin.
+    - destruct H as [H [H1 H2]]. simpl. destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + replace (S r - S x) with (r - x) in H1 by lia.
+        destruct (a ??= r - x) as [E'|E']; subst.
+        * rewrite <- E' in E. rewrite nat2finS_fin2nat in E. destruct (H E).
+        * specialize IHx with (M:=M) (a:=a) (j:=j). rewrite IHx.
+          split;[|split]; fin. apply H2; fin.
+      + replace (S r - S x) with (r - x) in H1 by lia.
+        destruct (a ??= r - x) as [E'|E']; subst.
+        * f_equal. rewrite <- E'; fin.
+        * specialize H2 with (#(r - x) :'I_( S r)). exfalso; apply E.
+          apply H2; fin.      
+  Qed. 
+
+  Lemma getcolPivot_None :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (j : 'I_(S c)),
+      getcolPivot M x j = None <-> 
+        forall (i : 'I_(S r)), S r - x <= i ->  M.[i].[j] = 0.
+  Proof.
+    split; induction x; intros.
+    - simpl in H0. pose proof (fin2nat_lt i). lia.
+    - simpl in H. destruct (Aeqdec (M #(r - x) j) 0) as [E|E]; try easy.
+      replace (S r - S x) with (r - x) in H0 by lia. destruct (i ??= r - x) as [E0|E0].
+      + rewrite <- E. f_equal. apply fin2nat_eq_iff; fin.
+      + apply IHx; try easy; try lia.
+    - simpl; auto.
+    - simpl. replace (S r - S x) with (r - x) in H by lia.
+      destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + apply IHx; intros. destruct (i ??= r - x) as [E0|E0].
+        * rewrite <- E. f_equal. apply fin2nat_eq_iff; fin.
+        * apply H. lia.
+      + exfalso. apply E. apply H. apply Nat.eq_le_incl. fin.
+  Qed.
+
+  Lemma getrowPivot_same_col : 
+    forall (x : nat) {r c} (M M': mat (S r) (S c))  (j : 'I_(S c)),
+    (forall i : 'I_(S r), M.[i].[j] = M'.[i].[j]) ->
+    getcolPivot M x j = getcolPivot M' x j.
+  Proof.
+    induction x; intros; auto. simpl.
+    replace (M' #(r - x) j) with (M #(r - x) j) by easy.
+    destruct (Aeqdec (M #(r - x) j) 0) as [E1|E1].
+    - apply IHx; intros; easy.
+    - auto.
+  Qed.
+
+  (* ======================================================================= *)
+  (** ** 某行的第一个非零元的列号 *)
+
+  (** 第 j 列的后 x 个元素中的第 1 个非零元的行号。
+      eg: 当 x 是`维数` 时，则从第 0 行开始往下查找。 *)
+  Fixpoint getrowPivot {r c} (M : mat (S r) (S c)) (x : nat) (i : 'I_(S r))
+    : option ('I_(S c)) :=
+    match x with
+    | O => None
+    | S x' =>
+        (* x的递归顺序：   x,    x-1, ... ,    1, (0)
+           S n-x的顺序：Sn-x, Sn-x+1, ... , Sn-1, (Sn) *)
+        if Aeqdec (M i #(S c - x)) 0
+        then getrowPivot M x' i 
+        else Some #(S c - x)
+    end.
+
+  Lemma getrowPivot_imply_nonzero :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      getrowPivot M x i = Some j -> M i j <> 0.
+  Proof.
+    induction x; intros.
+    - simpl in H. easy.
+    - simpl in H. destruct (Aeqdec (M i #(c - x)) 0).
+      + apply IHx in H; auto.
+      + inv H. auto.
+  Qed.
+  
+  (* 非零元列号 j < S n *)
+  Lemma getrowPivot_max : 
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      getrowPivot M x i = Some j -> j < S c.
+  Proof.
+    induction x; intros.
+    - simpl in H. easy.
+    - simpl in H. destruct Aeqdec as [E|E].
+      + apply IHx in H. auto.
+      + inversion H. rewrite fin2nat_nat2finS; lia.
+  Qed.
+  
+  (* 非零元列号 j >= S c - x *)
+  Lemma getrowPivot_min :
+    forall (x : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      getrowPivot M x i = Some j -> j >= S c - x.
+  Proof.
+    induction x; intros.
+    - simpl in H. easy.
+    - simpl in H. destruct Aeqdec as [E|E].
+      + apply IHx in H. lia.
+      + inversion H. rewrite fin2nat_nat2finS; lia.
+  Qed.
+
+  Lemma getrowPivot_mremoveT :
+    forall (x : nat) {r c} (M : mat (S (S r)) (S c)) (i : 'I_(S r)),
+      getrowPivot (mremoverT M) x i = getrowPivot M x (fSuccRange i).
+  Proof.
+      induction x; intros; try easy. 
+      simpl. unfold mremoverT; rewrite vnth_vremoveT.
+      destruct (Aeqdec (M (fSuccRange i) #(c - x)) 0) eqn : E; 
+      [apply IHx|]; easy.
+  Qed.
+
+
+  Lemma getcolPivotNone_getrowPivot :
+    forall (x y: nat) {r c} (M : mat (S r) (S c)),
+      getcolPivot M x #(c - y) = None ->
+        forall (i : 'I_(S r)), S r - x <= i ->
+          getrowPivot M (S y) i = getrowPivot M y i.
+  Proof.
+    intros. rewrite getcolPivot_None in H. simpl.
+    destruct (Aeqdec (M i #(c - y)) 0) as [E|E]; try easy.
+    exfalso; apply E. apply H; try easy.
+  Qed.
+
+  Lemma getrowPivot_neqzero :
+    forall (y : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)),
+      S c - y <= j -> M.[i].[j] <> 0 ->
+      exists a : 'I_(S c), getrowPivot M y i = Some a /\ a <= j.
+  Proof.
+    induction y; intros. 
+    - pose proof (fin2nat_lt j); lia.
+    - destruct (j ??= c - y) as [E0 | E0].
+      + exists j. split; auto. simpl. replace (#(c - y) : 'I_(S c)) with j.
+        2 : { apply fin2nat_eq_iff. rewrite fin2nat_nat2finS; fin. }
+        destruct (Aeqdec (M i j) 0) as [E1| E1]; auto. 
+        rewrite E1 in H0. destruct H0; auto.
+      + apply IHy in H0; try lia. destruct H0 as [a [H0 H1]].
+        simpl. destruct (Aeqdec (M i #(c - y)) 0) as [E1|E1].
+        * exists a; split; auto.
+        * exists (#(c - y) : 'I_(S c)). split; auto. rewrite fin2nat_nat2finS; lia.
+  Qed.
+
+  Lemma getrowPivot_eq_Some :
+    forall (y : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (a : 'I_(S c)),
+    getrowPivot M y i = Some a <->
+    (S c - y <= a /\ M.[i].[a] <> 0 /\ forall j : 'I_(S c), S c - y <= j -> j < a -> M.[i].[j] = 0).
+  Proof.
+    induction y; intros; split; intros.
+    - simpl in H. inv H.
+    - destruct H. pose proof (fin2nat_lt a). lia.
+    - simpl in H. destruct (Aeqdec (M i #(c - y)) 0) as [E|E].
+      + apply IHy in H. destruct H as [H [H0 H1]]. repeat split; try lia; auto.
+        intros. destruct (j ??= c - y) as [E'|E'].
+        * replace j with (#(c-y) : 'I_(S c)); auto.
+          apply fin2nat_eq_iff. rewrite fin2nat_nat2finS; fin.
+        * apply H1; fin.
+      + inv H. split;[|split]; auto.
+        * rewrite fin2nat_nat2finS; auto. 
+          replace (S c - S y) with (c - y) by lia. lia.
+        * intros. rewrite fin2nat_nat2finS in H0; lia.
+    - destruct H as [H [H1 H2]]. simpl. destruct (a ??= c - y) as [E|E].
+      + replace a with (#(c-y) : 'I_(S c)) in *.
+        2 :{ apply fin2nat_eq_iff; rewrite fin2nat_nat2finS; lia. }
+        destruct (Aeqdec (M i #(c - y)) 0 ) as [E'|E']; auto. contradiction.
+      + destruct (Aeqdec (M i #(c - y)) 0)  as [E'|E'].
+        * apply IHy; repeat split; try lia; auto.
+          intros. apply H2; lia.
+        * exfalso. apply E'. apply H2; fin.
+  Qed.
+
+   Lemma getrowPivot_eq_None :
+    forall (y : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)),
+    getrowPivot M y i = None <->
+    (forall j : 'I_(S c), S c - y <= j -> M.[i].[j] = 0).
+  Proof.
+    induction y; intros; split; intros.
+    - pose proof (fin2nat_lt j); fin.
+    - auto. 
+    - replace (S c - S y) with (c - y) in H0 by lia.
+      simpl in H. destruct (Aeqdec (M i #(c - y)) 0) as [E|E].
+      + destruct (j ??= c - y) as [E'|E'].
+        * replace j with (#(c - y) : 'I_(S c)); auto.
+          apply fin2nat_eq_iff. rewrite fin2nat_nat2finS; lia.
+        * apply IHy with (j:=j) in H; auto. lia.
+      + inv H.
+    - simpl. destruct (Aeqdec (M i #(c - y)) 0) as [E|E].
+      + apply IHy; intros. apply H; fin.
+      + exfalso. apply E. apply H; fin.
+  Qed.    
+
+    (** {a <= b} + {~(a <= b)} *)
+  Lemma getrowPivot_dec : 
+     forall (y : nat) {r c} (M : mat (S r) (S c)) (i : 'I_(S r)),
+     {exists a : 'I_(S c), getrowPivot M y i = Some a } + {getrowPivot M y i = None}.
+  Proof.
+    induction y; intros.
+    - right. auto.
+    - simpl. destruct (Aeqdec (M i #(c - y)) 0) as [E|E].
+      + apply IHy.
+      + left. exists (#(c - y) : 'I_(S c)). auto.  
+  Qed.
+
+  Lemma getrowPivot_same_row : 
+    forall (y : nat) {r c} (M M': mat (S r) (S c)) (i : 'I_(S r)),
+    M.[i] = M'.[i] ->
+    getrowPivot M y i = getrowPivot M' y i.
+  Proof.
+    induction y; intros; auto. simpl.
+    replace (M' i) with (M i) by auto.
+    destruct (Aeqdec (M i #(c - y)) 0) as [E1|E1]; auto.
+  Qed.
+
+  
+
+
+  (* ******************************************************************* *)
+  (* ******************************************************************* *)
+
+  (* ******************************************************************* *)
+  (** * 一般矩阵谓词 *)
+  
+  (** ** 行阶梯行 *)
+  
+  (** 行首元判断次序，后者若无首元恒成立 *)
+  Definition rpivotlt {n} (a : option 'I_n) (b : option 'I_n) :=
+    match a, b with
+    | _, None => True
+    | None, _ => False
+    | Some a', Some b' => a' < b'
+  end.
+
+  Lemma rpivotlt_trans :
+    forall {n} (a b c : option 'I_n),
+      rpivotlt a b -> rpivotlt b c -> rpivotlt a c.
+  Proof.
+    intros; destruct a as [a'|]; 
+    destruct b as [b'|]; destruct c as [c'|];
+    simpl rpivotlt in *; lia.
+  Qed.
+
+  (** 判断行阶梯行， 对于矩阵M, 右下角 x * y 的子矩阵为行阶梯行 *)
+  Definition isREF {r c} (M : mat (S r) (S c)) (x y : nat) : Prop :=
+    forall i j :'I_(S r), S r - x <= i -> i < j ->
+      rpivotlt (getrowPivot M y i) (getrowPivot M y j).
+
+  Lemma isREF_row0 :
+    forall y {r c} (M : mat (S r) (S c)), isREF M 0 y.
+  Proof.
+    unfold isREF; intros. simpl in H. pose proof (fin2nat_lt i). lia.
+  Qed.
+
+  Lemma isREF_row1 : 
+    forall y {r c} (M : mat (S r) (S c)), isREF M 1 y.
+  Proof.
+    unfold isREF; intros. simpl in H. rewrite Nat.sub_0_r in H.
+    assert (r < j) by lia. pose proof (fin2nat_lt j). lia.
+  Qed.
+
+  Lemma isREF_col0 :
+    forall x {r c} (M : mat (S r) (S c)), isREF M x 0.
+  Proof.
+    unfold isREF; intros. simpl. auto.
+  Qed.
+
+  Lemma isREF_row_intro :
+    forall {r c} (M : mat (S r) (S c)) (x y : nat),
+      isREF M x y ->
+      rpivotlt (getrowPivot M y #(r - x)) (getrowPivot M y #(S r - x)) ->
+      isREF M (S x) y.
+  Proof.
+    unfold isREF; intros. simpl in H1. destruct (i??=r-x).
+    - assert (x <> O). { 
+        intro; subst. assert (r<j) by fin. pose proof (fin2nat_lt j). lia. }
+      replace (getrowPivot M y i) with (getrowPivot M y #(r - x)).
+      2: { f_equal. apply fin2nat_eq_iff; fin. } destruct (j??=S r - x).
+      + replace (getrowPivot M y j) with (getrowPivot M y #(S r - x)). auto.
+        f_equal. apply fin2nat_eq_iff; fin.
+      + eapply rpivotlt_trans. apply H0. apply H; fin.
+    - apply H; fin.
+  Qed. 
+
+  Lemma isREF_col_intro :
+    forall {r c} (M : mat (S r) (S c)) (x y : nat),
+      isREF M x y ->
+      getcolPivot M x #(c - y) = None -> 
+      isREF M x (S y).
+  Proof.
+      unfold isREF; intros. specialize H with i j.
+      replace (getrowPivot M (S y) i) with (getrowPivot M y i).
+      replace (getrowPivot M (S y) j) with (getrowPivot M y j).
+      apply H; try easy.
+      symmetry; apply getcolPivotNone_getrowPivot with (i:=j) in H0; 
+      try easy; try lia.
+      symmetry; apply getcolPivotNone_getrowPivot with (i:=i) in H0; 
+      try easy.
+  Qed.
+
+  Lemma isREF_row_inv :
+    forall {r c} (M : mat (S r) (S c)) (x y : nat),
+      isREF M (S x) y -> isREF M x y.
+  Proof.
+    unfold isREF; intros. apply H; try easy; lia.
+  Qed.
+
+  Lemma isREF_intro :
+    forall {r c} (M : mat (S r) (S c)) (x y : nat),
+    isREF M x y ->
+    M.[#(r - x)].[#(c - y)] <> 0 ->
+    getcolPivot M x #(c - y) = None ->
+    isREF M (S x) (S y).
+  Proof.
+    intros. destruct (x ??= O) as [E|E]. subst. apply isREF_row1.
+    apply isREF_col_intro in H; try easy.
+    apply isREF_row_intro; auto.
+    replace (getrowPivot M (S y) #(r - x)) with (Some (#(c - y) : fin (S c))).
+    2: { symmetry. simpl. destruct (Aeqdec (M #(r - x) #(c - y)) 0) as [E0|E0]; easy. }
+    destruct (getrowPivot M (S y) #(S r - x)) as [a|] eqn : E1; try easy. simpl.
+    apply nat_le_neq_imply_lt. apply getrowPivot_min in E1. 
+    replace (S c - S y) with (c - y) in E1 by lia. 
+    rewrite fin2nat_nat2finS; try easy; try lia. 
+    intro. apply getrowPivot_imply_nonzero in E1.
+    apply E1. rewrite getcolPivot_None in H1. rewrite fin2nat_eq_iff in H2.
+    rewrite <- H2. apply H1. fin.
+  Qed.
+
+  Lemma isREF_row_Some : 
+    forall x y {r c} (M : mat (S r) (S c)) (i : 'I_(S r)) (a : 'I_(S c)),
+    (S r - x) <= i -> getrowPivot M y i = Some a ->
+    isREF M x y -> (forall (i': 'I_(S r)) (j': 'I_(S c)), i < i' -> S c - y <= j' ->  j' <= a -> M.[i'].[j'] = 0).
+  Proof.
+    intros. apply NNPP. intro. 
+    apply getrowPivot_neqzero with (y:=y) in H5; auto.
+    destruct H5 as [b [H5 H6]]. assert (b <= a) by lia.
+    unfold isREF in H1. specialize H1 with (i:=i) (j:=i').
+    apply H1 in H; fin. rewrite H0 in H. rewrite H5 in H.
+    simpl in H. lia.
+  Qed.
+
+  Lemma isREF_row_None : 
+    forall x y {r c} (M : mat (S r) (S c)) (i : 'I_(S r)),
+    (S r - x) <= i -> getrowPivot M y i = None ->
+    isREF M x y -> (forall (i': 'I_(S r)) (j': 'I_(S c)), i < i' -> S c - y <= j' ->  M.[i'].[j'] = 0).
+  Proof.
+    intros. apply NNPP. intro. 
+    apply getrowPivot_neqzero with (y:=y) in H4; auto.
+    destruct H4 as [b [H4 H5]].
+    unfold isREF in H1. specialize H1 with (i:=i) (j:=i').
+    apply H1 in H; fin. rewrite H0 in H. rewrite H4 in H.
+    simpl in H. lia.
+  Qed. 
+
+  Lemma mrowAdd_keep_isREF : 
+  forall (x y : nat) {r c} (M : mat (S r) (S c)) (i i' : 'I_(S r)) (k : tA),
+    x <= S r ->  i' < i -> 
+    isREF M x y ->
+    isREF (mrowAdd i' i k M) x y.
+  Proof.
+    induction x; intros. 1:{ apply isREF_row0. }
+    destruct (x ??= 0)%nat as [E|E]. 1:{ subst. apply isREF_row1. }
+    apply isREF_row_intro. 
+    - replace (S r - S x) with (r - x) in H by lia.
+      destruct (i' ??= r - x) as [E'|E']. 
+      + unfold isREF. unfold isREF in H1. intros a b. intros.
+        assert (i' < a) by lia. assert (i' < b) by lia.
+        replace (getrowPivot (mrowAdd i' i k M) y a) with 
+          (getrowPivot M y a).
+        replace (getrowPivot (mrowAdd i' i k M) y b) with
+          (getrowPivot M y b). apply H1; fin. 
+        * apply getrowPivot_same_row. unfold mrowAdd.
+          extensionality j'. destruct (b ??= i') as [E1|E1]; try lia; auto.
+        * apply getrowPivot_same_row. unfold mrowAdd.
+          extensionality j'. destruct (a ??= i') as [E1|E1]; try lia; auto.
+      + apply IHx; fin. apply isREF_row_inv; auto.
+    - replace (getrowPivot (mrowAdd i' i k M) y #(r - x)) with
+        (getrowPivot M y #(r - x)).
+      replace (getrowPivot (mrowAdd i' i k M) y #(S r - x)) with
+        (getrowPivot M y #(S r - x)).
+      assert (x <= r) by lia. clear H. unfold isREF in H1. apply H1; fin.
+      + destruct (i' ??= S r - x ) as [E'|E'].
+        2:{ apply getrowPivot_same_row.  unfold mrowAdd.
+            extensionality j. destruct (#(S r - x) ??= i') as [E0|E0]; auto.
+            rewrite fin2nat_nat2finS in E0; lia. }
+        pose proof (getrowPivot_dec y M #(S r - x)). destruct H2 as [[a H2] | H2].
+        * rewrite H2; symmetry. assert (H3:=H2). rewrite getrowPivot_eq_Some in H2.
+          destruct H2 as [H2 [H4 H5]]. apply getrowPivot_eq_Some.
+          repeat split; fin; unfold mrowAdd.
+          ** destruct (#(S r - x) ??= i') as [E0|E0]; auto.
+             replace (M i a) with 0. replace (M #(S r - x) a + k * 0)%A with (M #(S r - x) a) by fin.
+             auto. symmetry. pose proof (isREF_row_Some (S x) y M #(S r - x) a).
+             apply H6; fin.
+          ** destruct (#(S r - x) ??= i') as [E0|E0]; auto.
+             replace (M i j) with 0. replace (M #(S r - x) j + k * 0)%A with (M #(S r - x) j) by fin.
+             apply getrowPivot_eq_Some in H3. destruct H3 as [H3 [H8 H9]]. apply H9; fin.
+             symmetry. pose proof (isREF_row_Some (S x) y M #(S r - x) a).
+             specialize H8 with (i':=i) (j':=j). apply H8; fin.
+        * rewrite H2. symmetry. apply getrowPivot_eq_None; intros. assert (H4:=H2).
+         rewrite getrowPivot_eq_None in H2.
+          unfold mrowAdd. destruct (#(S r - x) ??= i') as [E0|E0]; auto. replace (M i j) with 0.
+          replace (M #(S r - x) j + k * 0)%A with (M #(S r - x) j) by fin.
+          apply H2; fin. symmetry. pose proof (isREF_row_None (S x) y M #(S r - x)).
+          specialize H5 with (i':=i) (j':=j). apply H5; fin.
+       + destruct (i' ??= r - x ) as [E'|E'].
+        2:{ apply getrowPivot_same_row.  unfold mrowAdd.
+            extensionality j. destruct (#(r - x) ??= i') as [E0|E0]; auto.
+            rewrite fin2nat_nat2finS in E0; lia. }
+        pose proof (getrowPivot_dec y M #(r - x)). destruct H2 as [[a H2] | H2].
+        * rewrite H2; symmetry. assert (H3:=H2). rewrite getrowPivot_eq_Some in H2.
+          destruct H2 as [H2 [H4 H5]]. apply getrowPivot_eq_Some.
+          repeat split; fin; unfold mrowAdd.
+          ** destruct (#(r - x) ??= i') as [E0|E0]; auto.
+             replace (M i a) with 0. replace (M #(r - x) a + k * 0)%A with (M #(r - x) a) by fin.
+             auto. symmetry. pose proof (isREF_row_Some (S x) y M #(r - x) a).
+             apply H6; fin.
+          ** destruct (#(r - x) ??= i') as [E0|E0]; auto.
+             replace (M i j) with 0. replace (M #(r - x) j + k * 0)%A with (M #(r - x) j) by fin.
+             apply getrowPivot_eq_Some in H3. destruct H3 as [H3 [H8 H9]]. apply H9; fin.
+             symmetry. pose proof (isREF_row_Some (S x) y M #(r - x) a).
+             specialize H8 with (i':=i) (j':=j). apply H8; fin.
+        * rewrite H2. symmetry. apply getrowPivot_eq_None; intros. assert (H4:=H2).
+         rewrite getrowPivot_eq_None in H2.
+          unfold mrowAdd. destruct (#(r - x) ??= i') as [E0|E0]; auto. replace (M i j) with 0.
+          replace (M #(r - x) j + k * 0)%A with (M #(r - x) j) by fin.
+          apply H2; fin. symmetry. pose proof (isREF_row_None (S x) y M #(r - x)).
+          specialize H5 with (i':=i) (j':=j). apply H5; fin.
+  Qed. 
+
+  (** 判断首元是否为 1 *)
+  Definition isRowPivotOne {r c : nat} (M: mat (S r) (S c)) x y: Prop :=
+    forall (i : 'I_(S r)) (j : 'I_(S c)), 
+    S r - x <= i -> getrowPivot M y i = Some j -> M.[i].[j] = 1.
+
+  Lemma isRowPivotOne_row0 :
+    forall y {r c : nat} (M: mat (S r) (S c)),
+    isRowPivotOne M 0 y.
+  Proof.
+    unfold isRowPivotOne; intros. pose proof (fin2nat_lt i); lia.
+  Qed.
+
+  Lemma isRowPivotOne_col0 :
+    forall x {r c : nat} (M: mat (S r) (S c)),
+    isRowPivotOne M x 0.
+  Proof.
+    unfold isRowPivotOne; intros. inv H0.
+  Qed.
+
+  Lemma isRowPivotOne_row_intro_Some :
+    forall x y {r c : nat} (M: mat (S r) (S c)) (j : 'I_(S c)),
+    getrowPivot M y #(r - x) = Some j->
+    M.[#(r - x)].[j] = 1 ->
+    isRowPivotOne M x y ->
+    isRowPivotOne M (S x) y.
+  Proof.
+    unfold isRowPivotOne; intros. rename j0 into a.
+    replace (S r - S x) with (r - x) in H2 by lia.
+    destruct (i ??= r - x) as [E | E].
+    - replace i with (#(r - x) : 'I_(S r)) in *.
+      2: { apply fin2nat_eq_iff; rewrite fin2nat_nat2finS; lia. }
+      rewrite H in H3; inv H3. auto.
+    - apply H1; fin.
+  Qed.
+
+  Lemma isRowPivotOne_row_intro_None:
+    forall x y {r c : nat} (M: mat (S r) (S c)),
+    getrowPivot M y #(r - x) = None ->
+    isRowPivotOne M x y ->
+    isRowPivotOne M (S x) y.
+  Proof.
+    unfold isRowPivotOne; intros.
+    replace (S r - S x) with (r - x) in H1 by lia.
+    destruct (i ??= r - x) as [E | E].
+    - replace i with (#(r - x) : 'I_(S r)) in *.
+      2: { apply fin2nat_eq_iff; rewrite fin2nat_nat2finS; lia. }
+      rewrite H in H2. inv H2.
+    - apply H0; fin.
+  Qed.
+  
+  Lemma isRowPivotOne_col_intro :
+    forall x y {r c : nat} (M: mat (S r) (S c)),
+    getcolPivot M x #(c - y) = None ->
+    isRowPivotOne M x y ->
+    isRowPivotOne M x (S y).
+  Proof.
+    unfold isRowPivotOne; intros.
+    replace (getrowPivot M (S y) i) with (getrowPivot M y i) in H2.
+    2 :{ symmetry; apply getcolPivotNone_getrowPivot with (x := x); fin. }
+    apply H0; fin.
+  Qed.
+  
+  Lemma isRowPivotOne_intro :
+    forall x y {r c : nat} (M: mat (S r) (S c)) (j : 'I_(S c)),
+    getcolPivot M x #(c - y) = None ->
+    getrowPivot M (S y) #(r - x) = Some j->
+    M.[#(r - x)].[j] = 1 ->
+    isRowPivotOne M x y ->
+    isRowPivotOne M (S x) (S y).
+  Proof.
+    intros. apply isRowPivotOne_row_intro_Some with (j:=j); auto.
+    apply isRowPivotOne_col_intro; auto.
+  Qed.
+  
+  Lemma isRowPivotOne_row_inv :
+    forall {r c} (M : mat (S r) (S c)) (x y : nat),
+    isRowPivotOne M (S x) y -> isRowPivotOne M x y.
+  Proof.
+    unfold isRowPivotOne; intros. apply H; try easy; lia.
+  Qed.
+
+  Lemma mrowAdd_keep_isRowPivotOne : 
+  forall (x y : nat) {r c} (M : mat (S r) (S c)) (i i' : 'I_(S r)) (k : tA),
+    x <= S r ->  i' < i -> 
+    isREF M x y -> isRowPivotOne M x y ->
+    isRowPivotOne (mrowAdd i' i k M) x y.
+  Proof.
+    induction x; intros. 1:{ apply isRowPivotOne_row0. }
+    pose proof (getrowPivot_dec y M #(r - x)). destruct H3 as [[a E]|E].
+    - assert (H3 := E). rewrite getrowPivot_eq_Some in H3.  destruct H3 as [H3 [H4 H5]].
+      apply isRowPivotOne_row_intro_Some with (j:=a).
+      + rewrite getrowPivot_eq_Some. repeat split; fin; unfold mrowAdd.
+        * destruct (#(r - x) ??= i') as[E'|E']; auto. replace (M i a) with 0.
+          replace (M #(r - x) a + k * 0)%A with (M #(r - x) a)%A by fin; auto.
+          symmetry. pose proof (isREF_row_Some (S x) y M #(r - x) a).
+          specialize H6 with (i':=i) (j':=a). apply H6; fin.
+        * destruct (#(r - x) ??= i') as[E'|E']. 2: { apply H5; fin. } replace (M i j) with 0.
+          replace (M #(r - x) j + k * 0)%A with (M #(r - x) j)%A by fin; auto.
+          symmetry.  pose proof (isREF_row_Some (S x) y M #(r - x) a).
+          specialize H8 with (i':=i) (j':=j). apply H8; fin.
+      + unfold mrowAdd. destruct (#(r - x) ??= i') as [E'|E'].
+        * replace (M i a) with 0. replace (M #(r - x) a + k * 0)%A with (M #(r - x) a) by fin.
+          unfold isRowPivotOne in H2; apply H2 in E; fin. symmetry.
+          pose proof (isREF_row_Some (S x) y M #(r - x) a).
+          specialize H6 with (i':=i) (j':=a). apply H6; fin.
+        * unfold isRowPivotOne in H2; apply H2 in E; fin.
+      + apply IHx; fin. apply isREF_row_inv; auto. apply isRowPivotOne_row_inv; auto.
+    - assert (H3:=E). rewrite getrowPivot_eq_None in H3. apply isRowPivotOne_row_intro_None.
+      + rewrite getrowPivot_eq_None; intros. unfold mrowAdd.
+        destruct (#(r - x) ??= i') as [E'|E']. 2: { apply H3; fin. }
+        replace (M i j) with 0. replace (M #(r - x) j + k * 0)%A with (M #(r - x) j)%A by fin.
+        apply H3; fin. symmetry. pose proof (isREF_row_None (S x) y M #(r - x)).
+        specialize H5 with (i':=i) (j':=j). apply H5; fin.
+      + apply IHx; fin. apply isREF_row_inv; auto. apply isRowPivotOne_row_inv; auto.
+  Qed. 
+
+  (** 行首元也会是列首元 *)
+  Definition isbothPivot {r c} (M : mat (S r) (S c)) (x : nat) :=
+    forall (i : 'I_(S r)) (j : 'I_(S c)), i < x ->
+    getrowPivot M (S c) i = Some j -> getcolPivot M (S r) j = Some i.
+
+  Lemma isbothPivot_row0 :
+    forall {r c} (M : mat (S r) (S c)), isbothPivot M 0.
+  Proof.
+    unfold isbothPivot; intros. inv H.
+  Qed.
+
+  Lemma isbothPivot_intro :
+    forall x {r c} (M : mat (S r) (S c)),
+    (forall j : 'I_(S c), getrowPivot M (S c) #x = Some j -> getcolPivot M (S r) j = Some #x) ->
+    isbothPivot M x -> isbothPivot M (S x).
+  Proof.
+    unfold isbothPivot; intros. destruct (i ??= x) as [E|E].
+    - assert (x < S r). { pose proof (fin2nat_lt i). lia. }
+      replace i with (#x : 'I_(S r)) in *.
+      2:{  apply fin2nat_eq_iff. rewrite fin2nat_nat2finS; lia. }
+      apply H; fin.
+    - apply H0; fin.
+  Qed. 
+
+  Lemma isbothPivot_row_inv :
+    forall {r c} (M : mat (S r) (S c)) (x : nat),
+      isbothPivot M (S x) -> isbothPivot M x.
+  Proof.
+    unfold isbothPivot; intros. apply H; try easy; lia.
+  Qed.
+
+  Lemma mrowAdd_keep_isbothPivot : 
+  forall (n : nat) {r c} (M : mat (S r) (S c)) (i i' : 'I_(S r)) (k : tA),
+    i' < i -> n <= i ->
+    isREF M (S r) (S c) -> isbothPivot M n ->
+    isbothPivot (mrowAdd i' i k M) n.
+  Proof.
+    induction n; intros. 1:{ apply isbothPivot_row0. }
+    assert (n < r). { pose proof (fin2nat_lt i). lia. } apply isbothPivot_intro; intros.
+    - clear IHn. unfold isbothPivot in H2.
+      specialize H2 with (i:=#n) (j:=j).
+      pose proof (getrowPivot_dec (S c) M #n). destruct H5 as [[a H5] | H5].
+      + assert (getrowPivot (mrowAdd i' i k M) (S c) #n = Some a).
+        * assert (H6 := H5).
+          rewrite getrowPivot_eq_Some in H6. destruct H6 as [_ [H6 H7]].
+          rewrite getrowPivot_eq_Some. repeat split; fin; unfold mrowAdd.
+          ** destruct (#n ??= i') as [E'|E']; fin. replace (M i a)%A with 0.
+             replace (M #n a + k * 0)%A with (M #n a)%A by fin; auto.
+             symmetry. pose proof (isREF_row_Some (S r) (S c) M #n a).
+             specialize H8 with (i':=i) (j':=a). apply H8 in H5; fin.
+          ** rename j0 into b. replace (M i b) with 0. replace (M #n b) with 0.
+            destruct (#n ??= i'); fin.
+            *** symmetry. apply H7; fin.
+            *** symmetry. pose proof (isREF_row_Some (S r) (S c) M #n a).
+                specialize H10 with (i':=i) (j':=b). apply H10 in H5; fin.
+        * rewrite H4 in H6. inv H6. apply H2 in H5 as H6; fin. rewrite <- H6.
+          apply getrowPivot_same_col. intros b. unfold mrowAdd.
+          destruct (b ??= i') as [E|E]; auto. replace (M i a) with 0. fin.
+          symmetry. pose proof (isREF_row_Some (S r) (S c) M #n a).
+          specialize H7 with (i':=i) (j':=a). apply H7 in H5; fin.
+      + assert (getrowPivot (mrowAdd i' i k M) (S c) #n = None).
+        * assert (H6 := H5).
+          rewrite getrowPivot_eq_None in H6.
+          rewrite getrowPivot_eq_None. intros b; unfold mrowAdd; intros.
+          destruct (#n ??= i') as [E'|E']; fin. replace (M i b)%A with 0.
+          replace (M #n b) with 0. fin.
+            ** symmetry. apply H6; fin.
+            ** symmetry. pose proof (isREF_row_None (S r) (S c) M #n).
+               specialize H8 with (i':=i)(j':=b). apply H8; fin.
+        * rewrite H4 in H6; inv H6.
+    - apply IHn; fin. apply isbothPivot_row_inv. auto.
+  Qed. 
+
+  (** 判断是否满足行最简单行 *)
+  Definition isRREF {r c} (M : mat (S r) (S c)) :=
+    isREF M (S r) (S c) /\ isRowPivotOne M (S r) (S c) /\ isbothPivot M (S r).
+  
+  (* ******************************************************************* *)
+  (** ** 运算中会用到的矩阵列操作 *)
+
+  (** 获取列主元并将其放在相应位置并置1 *)
+  Definition setPivotAone {r c} (M : mat (S r) (S c)) (x y : nat) (a : 'I_(S r))
+    : list RowOp * mat (S r) (S c) :=
+  let i : 'I_(S r) := #(S r - x) in
+  let (op1, M1) :=
+  (if a ??= i     (* 若当前行就是主元行，则不需要交换 *)
+    then (ROnop, M)
+    else (ROswap a i, mrowSwap a i M)) in
+            (* 使主元是 1 *)
+  let (op2, M2) :=
+    (let val : tA := M1.[i].[#(S c - y)] in
+        (ROscale i (/val), mrowScale i (/val) M1)) in
+  ([op2; op1]%list, M2).
+
+  Lemma setPivotAone_keep_former_row :
+    forall (x y : nat) {r c} (M M': mat (S r) (S c))  (a : 'I_(S r)) (l: list RowOp),
+      O < x -> x <= r -> getcolPivot M x #(S c - y) = Some a ->
+      setPivotAone M x y a = (l, M') -> 
+        (forall (i : 'I_(S r)) j, i <= (r - x) -> M' i j = M i j).
+  Proof.
+    intros. unfold setPivotAone in H2.
+    destruct (a ??= #(S r - x)); apply pair_equal_spec in H2; 
+    destruct H2; rewrite <- H4.
+    - unfold mrowScale; fin.
+    - apply getcolPivot_min in H1. unfold mrowScale, mrowSwap. fin.
+  Qed.
+  
+  Lemma  setPivotAone_infer_getcolPivotNone :
+    forall x y n {r c} (M M': mat (S r) (S c)) (l : list RowOp) a j,
+      0 < x -> x <= n ->
+      getcolPivot M n j = None ->
+      getcolPivot M x #(S c - y) = Some a -> 
+      setPivotAone M x y a = (l, M') ->
+      getcolPivot M' n j = None.
+  Proof.
+    intros. unfold setPivotAone in H3.
+    destruct (a ??= #(S r - x)); apply pair_equal_spec in H3; destruct H3; 
+    rewrite <- H4; rewrite getcolPivot_None; rewrite getcolPivot_None in H1; intros.
+    - unfold mrowScale. destruct ( i ??= #(S r - x)) as [E|E].
+      + assert (M i j = 0) by auto. rewrite H6. apply ring_mul_0_r.
+      + auto.
+    - rename n0 into E. apply getcolPivot_min in H2.
+      assert (S r - x < a). { 
+        replace (fin2nat (#(S r - x) : 'I_(S r))) with (S r - x) in E by fin. lia. }
+      unfold mrowScale, mrowSwap. destruct (i ??= #(S r - x)).
+      * destruct (#(S r - x) ??= a); fin. assert (M a j = 0). apply H1. lia.
+        rewrite H7; apply ring_mul_0_r.
+      * destruct (i ??= a). subst. apply H1. fin. apply H1; fin.
+  Qed.
+  
+  Lemma setPivotAone_prop :
+    forall (x y : nat) {r c} (M M': mat (S r) (S c))  (a : 'I_(S r)) (l: list RowOp),
+        x <> O -> getcolPivot M x #(S c - y) = Some a ->
+        setPivotAone M x y a = (l, M') -> 
+          M'.[#(S r - x)].[#(S c - y)] = 1.
+  Proof.
+    unfold setPivotAone; intros. destruct (a ??= #(S r - x)) as [E|E];
+    rewrite pair_equal_spec in H1; destruct H1 as [_ H2];
+    rewrite <- H2; unfold mrowScale; rewrite fin2nat_nat2finS; try lia;
+    destruct (S r - x ??= S r - x) as [E0|E0]; try lia; apply field_mulInvL.
+    - rewrite fin2nat_eq_iff in E.
+      rewrite E in H0. apply getcolPivot_imply_nonzero in H0. auto.
+    - unfold mrowSwap. rewrite fin2nat_nat2finS in *; try lia.
+      destruct (S r - x ??= a); try lia. destruct (S r - x ??= S r - x); try lia.
+      apply getcolPivot_imply_nonzero in H0. auto.
+  Qed.
+
+  Lemma setPivotAone_eq :
+    forall (x y : nat) {r c} (M M': mat (S r) (S c))  (a : 'I_(S r)) (l: list RowOp),
+      setPivotAone M x y a = (l, M') -> rowOps2mat l * M = M'.
+  Proof.
+    intros; unfold setPivotAone in H. destruct (a ??= #(S r - x));
+    apply pair_equal_spec in H; destruct H; rewrite <- H0;
+    rewrite <- H; rewrite rowOps2mat_cons; rewrite mmul_assoc.
+    - simpl rowOps2mat at 2. rewrite mmul_1_l. simpl.
+      rewrite <- mrowScale_mat1. auto.
+    - assert (rowOps2mat [ROswap a #(S r - x)] * M =  mrowSwap a #(S r - x) M).
+      { simpl. rewrite <- mrowSwap_mat1. auto. } rewrite H1.
+      simpl. rewrite <- mrowScale_mat1. auto.
+  Qed.
+
+  Lemma setPivotAone_rowOpValid :
+    forall (x y : nat) {r c} (M M': mat (S r) (S c))  (a : 'I_(S r)) (l: list RowOp),
+      getcolPivot M x #(S c - y) = Some a -> setPivotAone M x y a = (l, M') -> Forall roValid l.
+  Proof.
+    intros; unfold setPivotAone in H0. destruct (a ??= #(S r - x)) as [E|E];
+    apply pair_equal_spec in H0; destruct H0; rewrite <- H0.
+    - apply fin2nat_eq_iff in E. rewrite E in H.
+      apply getcolPivot_imply_nonzero in H. apply Forall_cons.
+      + simpl in H. simpl. apply field_inv_neq0_if_neq0. auto.
+      + apply Forall_cons; simpl; auto.
+    -  apply Forall_cons.
+      + assert (mrowSwap a #(S r - x) M #(S r - x) #(S c - y) <> 0 ).
+        { unfold mrowSwap. destruct (#(S r - x) ??= a) as [E1|E1].
+          rewrite <- E1 in E. exfalso; apply E; auto. clear E1.
+          destruct (#(S r - x) ??= #(S r - x)) as [E1|E1].
+          apply getcolPivot_imply_nonzero in H. auto.
+          exfalso; apply E1; auto. }
+        simpl in H2; simpl. apply field_inv_neq0_if_neq0. auto.
+      + apply Forall_cons; simpl; auto.
+  Qed.
+
+  (** 向下消元 *)
+  Fixpoint ElimDown {r c} (M : mat (S r) (S c)) (x : nat) (i: 'I_(S r)) (j : 'I_(S c))
+    : list RowOp * mat (S r) (S c) :=
+    match x with
+    | O => ([], M)
+    | S x' =>
+        (* 递归时 x 从大到小，而 fx 是从小到大 *)
+        let fx : 'I_(S r) := #(S r - x) in
+        let a : tA := M.[fx].[j] in
+        (* 如果 M[S n-x,j] <> 0，则 j 行的 -M[S n-x,j] 倍加到 S n-x 行。要求 M[j,j]=1 *)
+        if Aeqdec a 0
+        then ElimDown M x' i j
+        else
+          let op1 := ROadd fx i (-a)%A in
+          let M1 := mrowAdd fx i (-a)%A M in
+          let (l2, M2) := ElimDown M1 x' i j in
+          ((l2 ++ [op1])%list, M2)
+    end.
+
+  Lemma ElimDown_keep_former_row :
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimDown M x i j = (l, M') ->
+      x < S r - i ->
+      (forall (a : 'I_(S r)) (b : 'I_(S c)), a < S r - x -> M' a b = M a b).
+  Proof.
+    induction x; intros.
+    - simpl in H. inv H. auto.
+    - simpl in H.
+      destruct Aeqdec as [E|E].
+      + apply IHx with (a:=a)(b:=b) in H; auto; try lia.
+      + destruct ElimDown as [l2 M2] eqn: T2.
+        inversion H. rewrite <- H4. apply IHx with (a:=a)(b:=b) in T2; try lia.
+        * rewrite T2. unfold mrowAdd; fin.
+  Qed.
+
+  Lemma ElimDown_prop:
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimDown M x i j = (l, M') ->
+      M i j = 1 ->
+      x < S r - i ->
+      (forall a : 'I_(S r), S r - x <= a -> M' a j = 0).
+  Proof.
+    induction x; intros.
+    - pose proof (fin2nat_lt a). lia.
+    - simpl in H.
+      destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + destruct (a ??= r - x) as [E1|E1].
+        * apply ElimDown_keep_former_row with (a:=a)(b:=j) in H; auto; try lia.
+          subst. rewrite H. rewrite <- E1 in E. rewrite nat2finS_fin2nat in E; auto.
+        * apply IHx with (a:=a) in H; auto; try lia.
+      + destruct ElimDown as [l2 M2] eqn: T2.
+        inversion H. rewrite <- H5.
+        replace (S r - S x) with (r - x) in H2 by lia.
+        destruct (a ??= r - x) as [E1|E1].
+        * apply ElimDown_keep_former_row with (a:=a)(b:=j) in T2; auto; try lia.
+          rewrite T2. unfold mrowAdd; fin. rewrite H0. rewrite <- E0. fin.
+        * apply IHx with (a:=a) in T2; auto; try lia. unfold mrowAdd; fin.
+  Qed.
+  
+  Lemma ElimDown_infer_getcolPivot:
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimDown M x i j = (l, M') ->
+      M i j = 1 ->
+      x < S r - i ->
+      getcolPivot M' x j = None.
+  Proof.
+    intros. apply getcolPivot_None. intros a; intros.
+    pose proof (ElimDown_prop x M M' i j l). specialize H3 with a.
+    apply H3; try easy.
+  Qed.
+
+  Lemma ElimDown_keep_getcolPivot :
+    forall x n {r c} (M M': mat (S r) (S c)) (l : list RowOp) (i : 'I_(S r)) j m,
+      getcolPivot M n m = None -> S r - n <= i ->
+      ElimDown M x i j = (l, M') -> getcolPivot M' n m = None.
+  Proof.
+    induction x; intros.
+    - simpl in H1; inv H1; auto.
+    - simpl in H1. destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + specialize IHx with (n:=n) (M:=M) (M':=M') 
+          (l:=l) (i:=i) (j:=j) (m:=m). apply IHx; fin.
+      + destruct ElimDown as [l2 M2] eqn : E0. injection H1; clear H1; intros.
+        specialize IHx with (n:=n) (M:=mrowAdd #(r - x) i (- M #(r - x) j) M)
+          (M':=M2) (l:=l2) (i:=i) (j:=j) (m:=m).
+        apply IHx in E0; fin; subst; auto.
+        rewrite getcolPivot_None. intros a H1. rewrite getcolPivot_None in H.
+        unfold mrowAdd. destruct (a ??= #(r - x)).
+        * assert (M a m = 0) by auto. assert (M i m = 0) by auto.
+          rewrite H2. rewrite H3. fin.
+        * auto.
+  Qed. 
+
+  Lemma isREF_ElimDown :
+    forall {r c} (M M': mat (S r) (S c)) (x y : nat) (l : list RowOp ),
+      M.[#(r - x)].[#(c - y)] = 1 ->
+      x <= r ->
+      ElimDown M x #(r - x) #(c - y) = (l, M') ->
+      isREF M' x y ->
+      isREF M' (S x) (S y).
+  Proof.
+    intros. apply isREF_intro; try easy.
+    assert (M' #(r - x) #(c - y) = M.[#(r - x)].[#(c - y)]).
+    { apply ElimDown_keep_former_row with (a:=#(r - x)) (b:=#(c - y)) in H1; try easy;
+      rewrite fin2nat_nat2finS; try lia. } pose proof field_1_neq_0. intro. 
+    rewrite <- H in H4; rewrite <- H5 in H4. apply H4; easy.
+    apply ElimDown_infer_getcolPivot in H1; auto. rewrite fin2nat_nat2finS; try lia.
+  Qed. 
+
+  Lemma ElimDown_eq :
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimDown M x i j = (l, M') -> rowOps2mat l * M = M'.
+  Proof.
+    induction x; intros; simpl in *.
+    - inversion H. simpl. apply mmul_1_l.
+    - destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + apply IHx in H; auto.
+      + destruct ElimDown as [l2 M2] eqn: T2.
+        apply IHx in T2. inversion H. rewrite <- H2, <- T2.
+        rewrite rowOps2mat_app. simpl.
+        rewrite !mmul_assoc. f_equal.
+        rewrite <- mrowAdd_mmul. rewrite mmul_1_l. auto.
+  Qed.
+
+  (** 对 M 向下消元得到 (l, M')，则 l 都是有效的 *)
+  Lemma ElimDown_rowOpValid :
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      x < S r - i -> ElimDown M x i j = (l, M') -> Forall roValid l.
+  Proof.
+    induction x; intros; simpl in *.
+    - inversion H0. constructor.
+    - (* 当前元素是否为0，若是则直接递归，若不是则消元后递归 *)
+      destruct (Aeqdec (M #(r - x) j) 0) as [E|E].
+      + apply IHx in H0; auto. lia.
+      + destruct ElimDown as [l2 M2] eqn: T2.
+        apply IHx in T2; try lia. inversion H0.
+        apply Forall_app. split; auto. repeat constructor. hnf. intro.
+        destruct j.
+        assert (r - x = i). {apply fin2nat_eq_iff in H1. fin. }
+        fin. subst. destruct (r - x) eqn:H2. fin. fin.
+  Qed.
+
+  (** ** 向上消元 *)
+  Fixpoint ElimUp {r c} (M : mat (S r) (S c)) (x : nat) (i: 'I_(S r)) (j : 'I_(S c))
+    : list RowOp * mat (S r) (S c) :=
+    match x with
+    | O => ([], M)
+    | S x' =>
+        (* 递归时 x 从大到小，而 fx 是从小到大 *)
+        let fx : 'I_(S r) := # x' in
+        let a : tA := M.[fx].[j] in
+        (* 如果 M[x',j] <> 0，则 j 行的 -M[i,j] 倍加到 x'行。要求 M[j,j]=1 *)
+        if Aeqdec a 0
+        then ElimUp M x' i j
+        else
+          let op1 := ROadd fx i (-a)%A in
+          let M1 := mrowAdd fx i (-a)%A M in
+          let (l2, M2) := ElimUp M1 x' i j in
+          ((l2 ++ [op1])%list, M2)
+    end.
+
+  Lemma ElimUp_keep_former_row :
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimUp M x i j = (l, M') ->
+      M i j = 1 ->
+      x <= i ->
+      (forall (a : 'I_(S r)) , x <= a -> M' a = M a).
+  Proof.
+    induction x; intros.
+    - simpl in H; inversion H; subst; auto.
+    - simpl in H.
+      destruct Aeqdec as [E|E].
+      + destruct (x ??= i) as [E'|E']. rewrite E' in E. 
+        rewrite nat2finS_fin2nat in E. rewrite E in H0. exfalso.
+        apply field_1_neq_0. symmetry; auto.
+        assert (x <= i) by fin.
+        apply IHx with (a:=a) in H; auto; lia.
+      + destruct ElimUp as [l2 M2] eqn: T2.
+        inversion H. subst. apply IHx with (a:=a) in T2; try lia.
+        * rewrite T2. unfold mrowAdd; fin. pose proof (fin2nat_lt i). lia.
+        * unfold mrowAdd; fin. pose proof (fin2nat_lt i). lia.
+  Qed.
+
+  Lemma ElimUp_prop:
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimUp M x i j = (l, M') ->
+      M i j = 1 ->
+      x <= i ->
+      (forall a : 'I_(S r), a < x -> M' a j = 0).
+  Proof.
+    induction x; intros.
+    - inv H2.
+    - simpl in H.
+      destruct (Aeqdec (M #x j) 0) as [E|E].
+      + destruct (x ??= i) as [E'|E']. rewrite E' in E.
+        rewrite nat2finS_fin2nat in E. rewrite E in H0. exfalso.
+        apply field_1_neq_0. symmetry; auto.
+        assert (x <= i) by fin. clear H1; clear E'.
+        destruct (a ??= x) as [E0 | E0].
+        * pose proof (ElimUp_keep_former_row x M M' i j l).
+          specialize H1 with (a := a). apply H1 in H; subst; auto.
+          rewrite H. rewrite <- E; f_equal; fin.
+        * assert (a < x) by fin. clear H2; clear E0. specialize IHx with (a:=a).
+          apply IHx in H; auto.
+      + destruct ElimUp as [l2 M2] eqn: T2. inversion H. subst M2.
+        clear H. destruct (a ??= x) as [E'|E'].
+        * pose proof (ElimUp_keep_former_row a (mrowAdd #a i (- M #a j) M) M' i j l2).
+          specialize H with (a := a). subst x. apply H in T2; clear H; fin.
+          rewrite T2. unfold mrowAdd. destruct (a ??= a); fin. rewrite H0. fin.
+          unfold mrowAdd. destruct (a ??= a); fin.
+        * specialize IHx with (a:=a). apply IHx in T2; fin. unfold mrowAdd.
+          destruct (i ??= #x); fin. pose proof (fin2nat_lt i). lia.
+  Qed.
+
+  Lemma ElimUp_infer_getcolPivot:
+    forall {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimUp M i i j = (l, M') ->
+      M i j = 1 ->
+      getcolPivot M' (S r) j = Some i.
+  Proof.
+    intros. apply getcolPivot_Some. split; [| split]; auto; try lia.
+    - pose proof (ElimUp_keep_former_row i M M' i j l).
+      specialize H1 with (a:=i). apply H1 in H; fin.
+      rewrite H. rewrite H0. apply field_1_neq_0.
+    - intros a; intros. pose proof (ElimUp_prop i M M' i j l).
+      specialize H3 with (a:=a). apply H3 in H; fin.
+  Qed.
+
+  Lemma ElimUp_keep_isREF :
+    forall x {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (a : 'I_(S c)) (l : list RowOp),
+      x <= i -> 
+      getrowPivot M (S c) i = Some a ->
+      M.[i].[a] = 1 ->
+      isREF M (S r) (S c) ->
+      ElimUp M x i a = (l, M') ->
+      isREF M' (S r) (S c).
+  Proof.
+    induction x; intros.
+    - simpl in H3. inv H3; auto.
+    - simpl in H3. destruct (Aeqdec (M #x a) 0) as [E|E].
+      + apply IHx in H3; fin.
+      + destruct ElimUp as [l2 M2] eqn : E1 in H3. injection H3; intros. subst M2.
+        assert (x < S r). { pose proof (fin2nat_lt i). lia. } apply IHx in E1; fin.
+        * rewrite getrowPivot_eq_Some. rewrite getrowPivot_eq_Some in H0.
+          destruct H0 as [_ [H0 H6]]. repeat split; try lia.
+          ** unfold mrowAdd. destruct (i ??= #x) as [E2|E2]; fin.
+          ** intros. unfold mrowAdd. destruct (i ??= #x) as [E2|E2]; fin.
+        * unfold mrowAdd. destruct (i ??= #x) as [E2|E2]; auto.
+          rewrite E2 in H. rewrite fin2nat_nat2finS in H; lia.
+        * apply mrowAdd_keep_isREF; fin.
+  Qed.
+
+  Lemma ElimUp_keep_isRowPivotOne :
+    forall x {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (a : 'I_(S c)) (l : list RowOp),
+      x <= i -> 
+      isREF M (S r) (S c) ->
+      isRowPivotOne M (S r) (S c) ->
+      ElimUp M x i a = (l, M') ->
+      isRowPivotOne M' (S r) (S c).
+  Proof.
+    induction x; intros.
+    - simpl in H2. inv H2; auto.
+    - simpl in H2. destruct (Aeqdec (M #x a) 0) as [E|E].
+      + apply IHx in H2; fin.
+      + destruct ElimUp as [l2 M2] eqn : E1 in H2. injection H2; intros. subst M2.
+        assert (x < S r). { pose proof (fin2nat_lt i). lia. } apply IHx in E1; fin.
+        * apply mrowAdd_keep_isREF; fin.
+        * apply mrowAdd_keep_isRowPivotOne; fin.
+  Qed.
+
+  Lemma ElimUp_keep_isbothPivot :
+    forall x n {r c} (M M' : mat (S r) (S c)) (l : list RowOp) (i : 'I_(S r)) (a : 'I_(S c)),
+      x <= i -> n <= i -> isREF M (S r) (S c) -> 
+      getrowPivot M (S c) i = Some a -> ElimUp M x i a = (l, M') ->
+      isbothPivot M n -> isbothPivot M' n.
+  Proof.
+    induction x; intros. 1:{ inv H3; auto. }
+    simpl in H3. destruct (Aeqdec (M #x a) 0) as [E|E].
+    - apply IHx with (n:=n) in H3; fin.
+    - destruct ElimUp as [l2 M2] eqn : E'. inv H3.
+      apply IHx with (n:=n) in E'; fin.
+      + pose proof (mrowAdd_keep_isREF (S r) (S c) M i #x (- M #x a)).
+        apply H3 in H1; auto; try lia. rewrite fin2nat_nat2finS; try lia.
+        pose proof (fin2nat_lt i); lia.
+      + rewrite <- H2. apply getrowPivot_same_row. unfold mrowAdd .
+        extensionality j. destruct (i ??= #x) as [E0|E0]; try easy.
+        rewrite fin2nat_nat2finS in E0; try lia.
+        pose proof (fin2nat_lt i). lia.
+  + apply mrowAdd_keep_isbothPivot; fin. pose proof (fin2nat_lt i). lia.
+  Qed.
+      
+  (** 对 M 向下消元得到 (l, M')，则 [l] * M = M' *)
+  Lemma ElimUp_eq :
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      ElimUp M x i j = (l, M') -> rowOps2mat l * M = M'.
+  Proof.
+    induction x; intros; simpl in *.
+    - inversion H. simpl. apply mmul_1_l.
+    - (* 当前元素是否为0，若是则直接递归，若不是则消元后递归 *)
+      destruct (Aeqdec (M #x j) 0) as [E|E].
+      + apply IHx in H; auto.
+      + destruct ElimUp as [l2 M2] eqn: T2.
+        apply IHx in T2. inversion H. rewrite <- H2, <- T2.
+        rewrite rowOps2mat_app. simpl.
+        rewrite !mmul_assoc. f_equal.
+        rewrite <- mrowAdd_mmul. rewrite mmul_1_l. auto.
+  Qed.
+
+  Lemma ElimUp_rowOpValid :
+    forall (x : nat) {r c} (M M' : mat (S r) (S c)) (i : 'I_(S r)) (j : 'I_(S c)) (l : list RowOp),
+      x <= i -> ElimUp M x i j = (l, M') -> Forall roValid l.
+  Proof.
+    induction x; intros; simpl in *.
+    - inversion H0. constructor.
+    - (* 当前元素是否为0，若是则直接递归，若不是则消元后递归 *)
+      destruct (Aeqdec (M #x j) 0) as [E|E].
+      + assert (x < S r). {pose proof (fin2nat_lt i); lia. }
+        destruct ((#x : 'I_(S r)) ??= i) as [E'|E']. rewrite fin2nat_nat2finS in E'; auto.
+        rewrite E' in H; lia. apply IHx in H0; auto. lia.
+      + destruct ElimUp as [l2 M2] eqn: T2. apply IHx in T2; try lia.
+        inversion H0; subst. apply Forall_app. split; auto.
+        repeat constructor. hnf. intros. assert (x < S r). {pose proof (fin2nat_lt i); lia. }
+        rewrite <- H1 in H. rewrite fin2nat_nat2finS in H; try lia.
+  Qed.
+
+  (* ******************************************************************* *)
+  (** ** 矩阵化简算法 *)
+
+  (** 化简为行阶梯行 *)
+  Fixpoint toREF {r c} (M : mat (S r) (S c)) (x : nat) (y : nat)
+    : list RowOp * mat (S r) (S c):=
+    match x, y with
+    | O, _ => ([], M)
+    | _, O => ([], M)
+    | S x', S y' =>
+        let i : 'I_(S r) := #(S r - x) in
+        let j : 'I_(S c) := #(S c - y) in
+        (* 找出主元 *)
+        match getcolPivot M x j with
+        | None => toREF M x y' (* 没有非零元，跳过该列 *)
+        | Some a => 
+            (* 找到主元并归一*)
+            let (l1, M1) := setPivotAone M x y a in
+            (* 使主元以下都是 0 *)
+            let (l2, M2) := ElimDown M1 x' i j in
+            (* 递归 *)
+            let (l3, M3) := toREF M2 x' y' in
+            ((l3 ++ l2 ++ l1)%list, M3)
+        end
+    end.
+  
+  Opaque getcolPivot.
+  
+  Lemma toREF_keep_former_row :
+    forall x y {r c} (M M': mat (S r) (S c))  (l : list RowOp),
+      x <= r -> toREF M x y = (l, M') ->
+      (forall (i : 'I_(S r)) j, i <= (r - x) -> M' i j = M i j).
+  Proof.
+    intros x y; generalize dependent x; induction y; destruct x; intros;
+    try (simpl in H0; injection H0; intros; subst; auto). simpl in H0.
+    destruct (getcolPivot M (S x) #(c - y)) as [a|] eqn : E. 
+    - destruct setPivotAone as [l1 M1] eqn : E1.
+      destruct ElimDown as [l2 M2] eqn : E2.
+      destruct (toREF M2 x y) as [l3 M3] eqn : E3.
+      injection H0; clear H0; intros; subst.
+      specialize IHy with (i:=i) (j:=j). apply IHy in E3; fin. rewrite E3.
+      pose proof (ElimDown_keep_former_row x M1 M2 #(r - x) #(c - y) l2).
+      specialize H0 with (a:=i) (b:=j). apply H0 in E2; fin.
+      rewrite E2.
+      pose proof (setPivotAone_keep_former_row (S x) (S y) M M1 a l1).
+      specialize H2 with (i:=i) (j:=j). apply H2 in E1; fin.
+    - specialize IHy with (i:=i) (j:=j). apply (IHy (S x) M M' l) in H; fin.
+  Qed.
+
+  Lemma toREF_keep_getcolPivot :
+    forall x y n {r c} (M M': mat (S r) (S c))  (l : list RowOp) j,
+    getcolPivot M n j = None -> x <= n -> j < (S c - y) ->
+    toREF M x y = (l, M') -> getcolPivot M' n j = None.
+  Proof.
+    intros x y; generalize dependent x; induction y; destruct x; intros;
+    try (simpl in H2; injection H2; intros; subst; auto).
+    replace (S c - S y) with (c - y) in * by lia.
+    simpl in H2. destruct (getcolPivot M (S x) #(c - y)) as [a|] eqn : E.
+    - destruct setPivotAone as [l1 M1] eqn : E1.
+      destruct ElimDown as [l2 M2] eqn : E2.
+      destruct (toREF M2 x y) as [l3 M3] eqn : E3.
+      injection H2; clear H2; intros; subst.
+      specialize IHy with (x:=x) (n:=n) (M:=M2) (M':=M') (l:=l3) (j:=j).
+      apply IHy in E3; fin.
+      pose proof (ElimDown_keep_getcolPivot x n M1 M2 l2 #(r - x) #(c - y) j).
+      apply H2; fin.
+      pose proof (setPivotAone_infer_getcolPivotNone (S x) (S y) n M M1 l1 a j).
+      apply H3; fin.
+    - specialize IHy with (x:=S x) (n:=n) (M:=M) (M':=M') (l:=l) (j:=j).
+      apply IHy; fin.
+  Qed.
+  
+  Lemma toREF_isREF :
+    forall x y {r c} (M M': mat (S r) (S c))  (l : list RowOp),
+    x <= S r -> y <= S c -> toREF M x y = (l, M') -> isREF M' x y.
+  Proof.
+    intros x y. generalize dependent x. 
+    induction y; intros. apply isREF_col0. destruct x.
+    apply isREF_row0. simpl in H1.
+    destruct (getcolPivot M (S x) #(c - y)) as [a|] eqn : E.
+    - destruct setPivotAone as [l1 M1] eqn : E1.
+      destruct ElimDown as [l2 M2] eqn : E2.
+      destruct (toREF M2 x y) as [l3 M3] eqn : E3. 
+      injection H1; clear H1; intros. subst; fin.
+      pose proof (setPivotAone_prop (S x) (S y) M M1 a l1). fin.
+      assert (M1.[#(S r - S x)].[#(S c - S y)] = 1) by (apply H1; try easy).
+      clear H1. replace (S r - S x) with (r - x) in * by lia.
+      replace (S c - S y) with (c - y) in * by lia.
+      apply IHy in E3 as H3; try lia. apply isREF_intro; try easy.
+      pose proof (toREF_keep_former_row x y M2 M' l3 ).
+      specialize H1 with (i:=#(r - x) : 'I_(S r)) (j:=#(c - y) : 'I_(S c)).
+      apply H1 in E3; fin. rewrite E3. 
+      pose proof (ElimDown_keep_former_row x M1 M2 #(r - x) #(c - y) l2).
+      specialize H4 with (a:=#(r - x) : 'I_(S r)) (b:=#(c - y) : 'I_(S c)).
+      apply H4 in E2; fin. rewrite E2; rewrite H2. apply field_1_neq_0.
+      apply ElimDown_infer_getcolPivot in E2 as H4; fin.
+      pose proof (toREF_keep_getcolPivot x y x M2 M' l3 #(c - y)). apply H1; fin.
+    - apply isREF_col_intro. apply IHy in H1; auto; lia.
+      pose proof (toREF_keep_getcolPivot (S x) y (S x) M M' l  #(c - y)). 
+      apply H2; fin.
+  Qed.
+
+  Lemma toREF_isRowPivotOne :
+    forall x y {r c} (M M': mat (S r) (S c))  (l : list RowOp),
+    x <= S r -> y <= S c -> toREF M x y = (l, M') -> isRowPivotOne M' x y.
+  Proof.
+    intros x y. generalize dependent x. induction y; intros. 
+    1:{ apply isRowPivotOne_col0. } destruct x. 1:{ apply isRowPivotOne_row0. }
+    simpl in H1. destruct (getcolPivot M (S x) #(c - y)) as [a|] eqn : E.
+    - destruct setPivotAone as [l1 M1] eqn : E1.
+      destruct ElimDown as [l2 M2] eqn : E2.
+      destruct (toREF M2 x y) as [l3 M3] eqn : E3. 
+      injection H1; clear H1; intros. subst; fin.
+      apply isRowPivotOne_intro with (j:=#(c - y)).
+      + pose proof (toREF_keep_getcolPivot x y x M2 M' l3 #(c - y)).
+        apply H1 in E3; fin. clear H1.
+        pose proof (ElimDown_infer_getcolPivot x M1 M2 #(r - x) #(c - y) l2).
+        apply H1 in E2; fin. clear H1.
+        pose proof (setPivotAone_prop (S x) (S y) M M1 a l1).
+        apply H1 in E; fin.
+      + simpl. replace ((M' #(r - x) #(c - y))) with 1.
+        destruct (Aeqdec 1 0) as [E' | E']; auto.
+        1:{ pose proof field_1_neq_0. rewrite E' in H1. contradiction. } symmetry.
+        pose proof (toREF_keep_former_row x y M2 M' l3).
+        specialize H1 with (i:=#(r - x)) (j:=#(c - y)).
+        apply H1 in E3; fin. rewrite E3. clear H1.
+        pose proof (ElimDown_keep_former_row x M1 M2 #(r - x) #(c - y) l2).
+        specialize H1 with (a:=#(r - x)) (b:=#(c - y)).
+        apply H1 in E2; fin. rewrite E2; clear H1.
+        pose proof (setPivotAone_prop (S x) (S y) M M1 a l1).
+        apply H1 in E1; fin.
+      + pose proof (toREF_keep_former_row x y M2 M' l3).
+        specialize H1 with (i:=#(r - x)) (j:=#(c - y)).
+        apply H1 in E3; fin. rewrite E3. clear H1.
+        pose proof (ElimDown_keep_former_row x M1 M2 #(r - x) #(c - y) l2).
+        specialize H1 with (a:=#(r - x)) (b:=#(c - y)).
+        apply H1 in E2; fin. rewrite E2; clear H1.
+        pose proof (setPivotAone_prop (S x) (S y) M M1 a l1).
+        apply H1 in E1; fin.
+      + apply IHy in E3; fin.
+    - apply IHy in H1 as H2. apply isRowPivotOne_col_intro; auto. 3: { lia. } 2:{ auto. }
+      pose proof (toREF_keep_getcolPivot (S x) y (S x) M M' l #(c - y)).
+      apply H3 in H1; fin.
+  Qed.
+
+  Lemma toREF_eq : 
+    forall (x y : nat) {r c : nat} (M M' : mat (S r) (S c)) (l : list RowOp),
+      toREF M x y = (l, M') -> rowOps2mat l * M = M'.
+  Proof.
+    intros x y. generalize dependent x. induction y; intros.
+    destruct x; simpl in H; inv H; simpl; apply mmul_1_l.
+    destruct x. simpl in H; inv H; simpl; apply mmul_1_l.
+    simpl in H. destruct (getcolPivot M (S x) #(c - y)) as [a|] eqn : E.
+    - destruct setPivotAone as [l1 M1] eqn : E1.
+      destruct ElimDown as [l2 M2] eqn : E2.
+      destruct (toREF M2 x y) as [l3 M3] eqn : E3.
+      injection H; clear H; intros. subst.
+      apply IHy in E3. rewrite <- E3.
+      apply ElimDown_eq in E2. rewrite <- E2.
+      apply setPivotAone_eq in E1. rewrite <- E1.
+      rewrite !rowOps2mat_app. rewrite <- !mmul_assoc. auto.
+    - apply IHy in H. auto.
+  Qed. 
+
+  Lemma toREF_rowOpValid :
+    forall (x y : nat) {r c : nat} (M M' : mat (S r) (S c)) (l : list RowOp),
+      x <= S r -> toREF M x y = (l, M') -> Forall roValid l.
+  Proof.
+    intros x y. generalize dependent x. induction y; intros.
+    destruct x; simpl in H0; inv H0; simpl; auto.
+    destruct x; simpl in H0; inv H0; simpl; auto.
+    destruct (getcolPivot M (S x) #(c - y)) as [a|] eqn : E.
+    - destruct setPivotAone as [l1 M1] eqn : E1.
+      destruct ElimDown as [l2 M2] eqn : E2.
+      destruct (toREF M2 x y) as [l3 M3] eqn : E3.
+      injection H2; clear H2; intros; subst.
+      apply Forall_app; split; [|apply Forall_app; split].
+      + apply IHy in E3; fin.
+      + apply ElimDown_rowOpValid in E2; fin.
+      + apply setPivotAone_rowOpValid in E1; fin.
+    - apply IHy in H2; auto.    
+  Qed.
+
+  Transparent getcolPivot.
+
+  (** 将化为行阶梯的矩阵化为行最简单 *)
+  Fixpoint REF2RREF {r c} (M : mat (S r) (S c)) (x : nat) : list RowOp * (mat (S r) (S c)) :=
+    match x with
+    | O => ([], M)
+    | S x' =>
+      let fx : 'I_(S r) := #x' in
+      match getrowPivot M (S c) fx with
+      | None => REF2RREF M x'
+      | Some a => 
+        let (l1, M1) := REF2RREF M x' in
+        let (l2, M2) := ElimUp M1 x' fx a in
+        ((l2 ++ l1)%list, M2)
+      end
+    end.
+
+  Opaque getrowPivot.
+
+  Lemma REF2RREF_keep_former_row : 
+    forall x {r c} (M M' : mat (S r) (S c)) (l : list RowOp),
+      x <= S r -> isRowPivotOne M (S r) (S c) -> REF2RREF M x = (l, M') ->
+      (forall i : 'I_(S r), x <= i -> M.[i] = M'.[i]).
+  Proof.
+    induction x; intros.
+    - simpl in H1. inv H1; auto.
+    - simpl in H1. destruct (getrowPivot M (S c) #x) as [a|] eqn : E.
+      + destruct REF2RREF as [l1 M1] eqn : E1.
+        destruct ElimUp as [l2 M2] eqn : E2. inv H1.
+        apply IHx with (i:=i) in E1 as H3; fin. rewrite H3.
+        pose proof (ElimUp_keep_former_row x M1 M' #x a l2).
+        specialize H1 with (a:=i). symmetry ; apply H1; fin.
+        unfold isRowPivotOne in H0. replace (M1 #x) with (M #x).
+        2:{ apply IHx with (i:=#x) in E1; fin. }
+        apply H0; auto; fin.
+      + apply IHx with (i:=i) in H1; fin.
+  Qed.
+
+  Lemma REF2RREF_keep_isREFandisRowPivotOne :
+    forall x {r c} (M M' : mat (S r) (S c)) (l : list RowOp),
+      x <= S r -> isREF M (S r) (S c) -> isRowPivotOne M (S r) (S c) ->
+      REF2RREF M x = (l, M') ->
+      isREF M' (S r) (S c) /\ isRowPivotOne M' (S r) (S c).
+  Proof.
+    induction x; intros.
+    - simpl in H2. inv H2. easy.
+    - simpl in H2. destruct (getrowPivot M (S c) #x) as [a|] eqn : E.
+      + destruct REF2RREF as (l1, M1) eqn : E1.
+        destruct ElimUp as (l2, M2) eqn : E2.
+        inv H2. apply IHx in E1 as E3; try easy; try lia. destruct E3 as [H2 H3].
+        assert (getrowPivot M1 (S c) #x = Some a).
+        { rewrite <- E. apply getrowPivot_same_row. 
+          pose proof (REF2RREF_keep_former_row x M M1 l1). specialize H4 with (i:=#x).
+          symmetry; apply H4; fin. } split.
+        * pose proof (ElimUp_keep_isREF x M1 M' #x a l2). apply H5 in E2; fin.
+          unfold isRowPivotOne in H3. apply H3; fin.
+        * pose proof (ElimUp_keep_isRowPivotOne x M1 M' #x a l2). apply H5 in E2; fin.
+      + apply IHx in H2; fin.
+  Qed. 
+
+  Lemma REF2RREF_isbothPivot :
+    forall x {r c} (M M' : mat (S r) (S c)) (l : list RowOp),
+    x <= S r ->
+    isREF M (S r) (S c) -> isRowPivotOne M (S r) (S c) ->
+    REF2RREF M x = (l, M') -> isbothPivot M' x.
+  Proof.
+    induction x; intros. 1:{ apply isbothPivot_row0. }
+    apply isbothPivot_intro; intros.
+    - clear IHx. simpl in H2. destruct (getrowPivot M (S c) #x) as [a|] eqn : E.
+      + inv H3. destruct REF2RREF as [l1 M1] eqn : E1.
+        destruct ElimUp as [l2 M2] eqn : E2. inv H2.
+        pose proof (REF2RREF_keep_isREFandisRowPivotOne x M M1 l1).
+        apply H2 in E1 as H3; fin. clear H2. destruct H3 as [H2 H3].
+        assert (getrowPivot M1 (S c) #x = Some a).
+        { rewrite <- E. apply getrowPivot_same_row.
+          pose proof (REF2RREF_keep_former_row x M M1 l1).
+          specialize H4 with (i:=#x). apply H4 in E1; fin. }
+        assert (getrowPivot M' (S c) #x = Some a).
+        { rewrite <- H4. apply getrowPivot_same_row.
+          pose proof (ElimUp_keep_former_row x M1 M' #x a l2).
+          specialize H6 with (a:=#x). apply H6 in E2; fin.
+          unfold isRowPivotOne in H3. apply H3; fin. }
+        rewrite H5 in H6; inv H6.
+        pose proof (ElimUp_infer_getcolPivot M1 M' #x a l2).
+        rewrite fin2nat_nat2finS in H6. apply H6 in E2; fin.
+        1:{ unfold isRowPivotOne in H3; apply H3; fin. } lia.
+      + assert (getrowPivot M' (S c) #x = None).
+        { rewrite <- E. apply getrowPivot_same_row.
+          pose proof (REF2RREF_keep_former_row x M M' l).
+          specialize H4 with (i:=#x). apply H4 in H2; fin. }
+        rewrite H3 in H4; inv H4.
+    - simpl in H2. destruct (getrowPivot M (S c) #x) as [a|] eqn : E.
+      + destruct REF2RREF as [l1 M1] eqn : E1.
+        destruct ElimUp as [l2 M2] eqn : E2. inv H2.
+        apply IHx in E1 as H2; fin; clear IHx. 
+        pose proof (ElimUp_keep_isbothPivot x x M1 M' l2 #x a).
+        apply H3 in E2; fin; clear H3.
+        * pose proof (REF2RREF_keep_isREFandisRowPivotOne x M M1 l1).
+          apply H3 in E1; fin.
+        * rewrite <- E. apply getrowPivot_same_row.
+          pose proof (REF2RREF_keep_former_row x M M1 l1).
+          specialize H3 with (i:=#x). symmetry; apply H3; fin.
+      + apply IHx in H2; fin.
+  Qed.
+
+  Lemma REF2RREF_eq : 
+    forall (x : nat) {r c : nat} (M M' : mat (S r) (S c)) (l : list RowOp),
+      REF2RREF M x = (l, M') -> rowOps2mat l * M = M'.
+  Proof.
+    induction x; intros. 1:{ inv H. simpl; apply mmul_1_l. }
+    simpl in H. destruct (getrowPivot M (S c) #x) as [a|] eqn : E.
+    - destruct REF2RREF as [l1 M1] eqn : E1.
+      destruct ElimUp as [l2 M2] eqn : E2. inv H.
+      rewrite !rowOps2mat_app. rewrite mmul_assoc.
+      apply IHx in E1. rewrite E1. apply ElimUp_eq in E2. auto.
+    - apply IHx in H. auto. 
+  Qed.
+
+  Lemma REF2RREF_rowOpValid :
+    forall (x : nat) {r c : nat} (M M' : mat (S r) (S c)) (l : list RowOp),
+      x <= S r -> REF2RREF M x = (l, M') -> Forall roValid l.
+  Proof.
+    induction x; intros. 1:{ simpl in H0. inv H0. auto. }
+    simpl in H0. destruct (getrowPivot M (S c) #x) as [a|] eqn : E.
+    - destruct REF2RREF as [l1 M1] eqn : E1. destruct ElimUp as [l2 M2] eqn : E2.
+      inv H0. rewrite Forall_app. split.
+      + apply ElimUp_rowOpValid in E2; auto; fin.  
+      + apply IHx in E1; fin.
+    - apply IHx in H0; fin. 
+  Qed.
+
+  Transparent getrowPivot.
+
+  (** 将一般矩阵转为行最简矩阵 *)
+  Definition toRREF {r c} (M : mat (S r) (S c)) : list RowOp * (mat (S r) (S c)) :=
+    let (l1, M1) := toREF M (S r) (S c) in
+    let (l2, M2) := REF2RREF M1 (S r) in
+    ((l2 ++ l1)%list, M2).
+
+  Theorem toRREF_isRREF :
+    forall {r c} (M M': mat (S r) (S c)) (l : list RowOp),
+    toRREF M = (l, M') -> isRREF M'.
+  Proof.
+    intros. unfold toRREF in H. 
+    destruct toREF as (l1, M1) eqn : E.
+    destruct REF2RREF as (l2, M2) eqn : E'. inv H.
+    unfold isRREF. apply and_assoc; split.
+    - pose proof (REF2RREF_keep_isREFandisRowPivotOne (S r) M1 M' l2). apply H; fin.
+      * pose proof (toREF_isREF (S r) (S c) M M1 l1). apply H0; fin.
+      * pose proof (toREF_isRowPivotOne (S r) (S c) M M1 l1). apply H0; fin.
+    - pose proof (REF2RREF_isbothPivot (S r) M1 M' l2). apply H in E'; fin.
+      * pose proof (toREF_isREF (S r) (S c) M M1 l1). apply H0 in E; fin.
+      * pose proof (toREF_isRowPivotOne (S r) (S c) M M1 l1). apply H0 in E; fin.
+  Qed.
+
+  Lemma toRREF_eq :
+    forall {r c : nat} (M M' : mat (S r) (S c)) (l : list RowOp),
+      toRREF M = (l, M') -> rowOps2mat l * M = M'.
+  Proof.
+    intros. unfold toRREF in H.
+    destruct toREF as [l1 M1] eqn : E1. destruct REF2RREF as [l2 M2] eqn : E2.
+    inv H. rewrite rowOps2mat_app. apply toREF_eq in E1. apply REF2RREF_eq in E2.
+    rewrite mmul_assoc. rewrite E1. apply E2.
+  Qed.
+
+  Lemma toRREF_rowOpValid :
+      forall {r c : nat} (M M' : mat (S r) (S c)) (l : list RowOp),
+      toRREF M = (l, M') -> Forall roValid l.
+  Proof.
+    intros. unfold toRREF in H.
+    destruct toREF as [l1 M1] eqn : E1. destruct REF2RREF as [l2 M2] eqn : E2.
+    inv H. rewrite Forall_app. split.
+    - apply REF2RREF_rowOpValid in E2; auto.
+    - apply toREF_rowOpValid in E1; auto.  
+  Qed.
+
+End GaussElim.
