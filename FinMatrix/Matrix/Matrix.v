@@ -141,6 +141,7 @@ Section l2m_m2l.
 
   (** matrix to dlist *)
   Definition m2l {r c} (M : mat tA r c) : dlist tA := map v2l (v2l M).
+
   (** dlist to matrix *)
   Definition l2m {r c} (d : dlist tA) : mat tA r c :=
     l2v (vzero Azero) (map (l2v Azero) d).

@@ -431,7 +431,7 @@ Section Row_Trans.
   
 
 End Row_Trans.
-
+(* 
 Section test.
 
 Context {tA : Type}.
@@ -541,3 +541,4 @@ Definition csr2ff (M : csr_matrix) : @mat tA M.(csr_row) M.(csr_col) :=
     end) end.
 
 Check vfoldl.
+*)

@@ -23,7 +23,7 @@ Section SystemOfLinearEquations.
   Notation vscal := (@vscal _ Amul).
   Notation "x \.* a" := (vscal x a) : vec_scope.
   Notation vzero := (vzero Azero).
-  Notation l2v := (@l2v _ Azero).
+  Notation l2v := (@l2v _ vzero).
   Notation vopp := (@vopp _ Aopp).
   Notation vscale := (@vscale _ Amul).
   Notation vadde := (@vadde _ Aadd Amul).
@@ -43,7 +43,6 @@ Section SystemOfLinearEquations.
   Notation lreps := (@lreps _ _ vadd vzero vscal).
   Notation ldep := (@ldep _ Azero _ vadd vzero vscal).
   Notation lindep := (@lindep _ Azero _ vadd vzero vscal).
-  Notation vsequiv := (@vsequiv _ _ vadd vzero vscal).
   Notation lcomb := (@lcomb tA _ vadd vzero  vscal).
 
   Notation rowOps2mat := (@rowOps2mat tA Aadd Azero Amul Aone).
@@ -56,15 +55,13 @@ Section SystemOfLinearEquations.
   Notation toREF := (@toREF _ Aadd 0 Aopp Amul Ainv _).
   Notation REF2RREF := (@REF2RREF _ Aadd 0 Aopp Amul _).
   Notation toRREF := (@toRREF _ Aadd 0 Aopp Amul Ainv _).
+  Notation toRREF' := (@toRREF' _ Aadd 0 Aopp Amul Ainv _).
   Notation ElimDown := (@ElimDown _ Aadd 0 Aopp Amul _).
 
-  (*
-  Notation isREF := (@isREF _ Azero _).
   Notation getrowPivot := (getrowPivot (Azero:=0)).
   Notation getcolPivot := (getcolPivot (Azero:=0)).
   Notation sm2REF := (@sm2REF _ Aadd 0 Aopp Amul Ainv _).
   Notation sm2RREF := (@sm2RREF _ Aadd 0 Aopp Amul _).
-  Notation toREF := (@toREF _ Aadd 0 Aopp Amul Ainv _). *)
 
   (** *** 线性方程（简称方程） *)
     
@@ -173,7 +170,91 @@ Section SystemOfLinearEquations.
       destruct (k ??= i); destruct (i ??= i); destruct (j ??= i); fin.
   Qed.
 
-  (** n元有序数组(c1,c2,...,cn)\T 是方程组 e 的一个“解” *)
+ 
+
+ 
+  (** *** 方程组的系数矩阵 *)
+    (* 取出s个方程的n元线性方程组的系数矩阵 *)
+  Definition coefMat {n s} (e : Eqns n s) : mat s n := mtrans (fst e).
+
+  Lemma coefMat_eqnsSwap :
+    forall {n s} (e : Eqns n s) (i j : 'I_s),
+    coefMat (eqnsSwap e i j) = mrowSwap i j (coefMat e).
+  Proof.
+    intros. unfold coefMat. destruct e as [A B]. simpl.
+    apply meq_iff_mnth; intros a b. unfold mtrans. rewrite vnth_vmap.
+    unfold mrowSwap, eqnsSwap, vswap. auto. 
+  Qed.
+
+  Lemma coefMat_eqnsScale:
+    forall {n s} (e : Eqns n s) (i : 'I_s) (K : tA),
+    coefMat (eqnsScale e i K) = mrowScale i K (coefMat e).
+  Proof.
+    intros. unfold coefMat. destruct e as [A B]. simpl.
+    apply meq_iff_mnth; intros a b. unfold mtrans. rewrite vnth_vmap.
+    unfold mrowScale, eqnsScale, vscale. destruct (a ??= i); fin.
+  Qed.
+
+  Lemma coefMat_eqnsAdd:
+    forall {n s} (e : Eqns n s) (i j: 'I_s) (K : tA),
+    i <> j -> coefMat (eqnsAdd e i j K) = mrowAdd i j K (coefMat e).
+  Proof.
+    intros. unfold coefMat. destruct e as [A B]. simpl.
+    apply meq_iff_mnth; intros a b. unfold mtrans. rewrite vnth_vmap.
+    unfold mrowAdd, eqnsAdd, eqnAdd, vswap, vadde. destruct (a ??= i); fin.
+    repeat f_equal; fin.
+  Qed.
+
+        
+    (* 取出s个方程的n元线性方程组的常数项 *)
+  Definition costMat {n s} (e : Eqns n s) : vec s := snd e.
+
+  Lemma costMat_eqnsSwap :
+    forall {n s} (e : Eqns n s) (i j : 'I_s),
+    costMat (eqnsSwap e i j) = vswap (costMat e) i j .
+  Proof.
+    intros. unfold costMat. destruct e as [A B]. simpl. auto. 
+  Qed.
+
+  Lemma costMat_eqnsScale:
+    forall {n s} (e : Eqns n s) (i : 'I_s) (K : tA),
+    costMat (eqnsScale e i K) = vscale (costMat e) i K.
+  Proof.
+    intros. unfold costMat. destruct e as [A B]. simpl. auto. 
+  Qed.
+
+  Lemma costMat_eqnsAdd:
+    forall {n s} (e : Eqns n s) (i j: 'I_s) (K : tA),
+    costMat (eqnsAdd e i j K) = vadde (costMat e) i j K.
+  Proof.
+    intros. unfold costMat. destruct e as [A B]. simpl. auto.
+  Qed. 
+
+
+  Definition toEqns {s n} (A : mat s n) (B: vec s) : Eqns n s :=
+    (mtrans A, B).
+
+  Lemma toEqns_eq : forall {n s : nat} (e : Eqns n s),
+    e = toEqns (coefMat e) (costMat e).
+  Proof.
+    intros. destruct e as [A B]. unfold coefMat. simpl.
+    unfold toEqns; f_equal.
+  Qed.
+
+
+  Lemma toEqns_coefMat : forall {n s : nat} (M : mat s n) (v : vec s),
+    coefMat (toEqns M v) = M.
+  Proof.
+    intros. unfold coefMat, toEqns. simpl. apply mtrans_mtrans.
+  Qed.
+
+  Lemma toEqns_costMat : forall {n s : nat} (M : mat s n) (v : vec s),
+    costMat (toEqns M v) = v.
+  Proof.
+    intros. unfold costMat, toEqns. auto.
+  Qed.
+
+   (** n元有序数组(c1,c2,...,cn)\T 是方程组 e 的一个“解” *)
   Definition isAnswer {n s} (e : Eqns n s) (c : @vec tA n) : Prop :=
     c <> vzero /\ lcomb c (fst e) = snd e.
 
@@ -258,150 +339,8 @@ Section SystemOfLinearEquations.
     rewrite eqnsAdd_eqnsAdd in H1; auto.
     replace (K - K) with 0 in H1 by ring. rewrite eqnsAdd_K0 in H1; auto.
   Qed.
-  
-  (* 方程组 e 的所有解组成的集合称为这个方程组的“解集” *)
-  (* 从方程组的解集中，并且还符合实际问题需要的解时，称为“可行解” *)
-  Definition isAnswers {n s t} (e : Eqns n s)
-    (cs : @vec (@vec tA n) t) : Prop :=
-    (forall c, isAnswer e c <-> lrep cs c).
 
-    (* 若方程组有两个解集，则这两个解集等价 *)
-  Lemma isAnswers_imply_equiv :
-    forall {n s t1 t2} (e : Eqns n s)
-      (cs1 : @vec (@vec tA n) t1) (cs2 : @vec (@vec tA n) t2),
-      isAnswers e cs1 -> isAnswers e cs2 -> vsequiv cs1 cs2.
-  Proof.
-    intros. unfold isAnswers, vsequiv, lreps in *; split; intros.
-    - pose proof (lrep_in cs2). unfold vforall in *; intros.
-      rewrite <- H. rewrite H0. apply H1.
-    - pose proof (lrep_in cs1). unfold vforall in *; intros.
-      rewrite <- H0. rewrite H. apply H1.
-  Qed.
-
-    (* 若一个解集与方程组的解集等价，则这个新的解集也是方程组的解集 *)
-  Lemma isAnswers_if_equiv :
-    forall {n s t1 t2} (e : Eqns n s)
-      (cs1 : @vec (@vec tA n) t1) (cs2 : @vec (@vec tA n) t2),
-      isAnswers e cs1 -> vsequiv cs1 cs2 -> isAnswers e cs2.
-  Proof.
-    intros. destruct H0 as [HA HB]. hnf. 
-    unfold isAnswers, vforall in *. split; intros.
-    - rewrite H in H0. apply lreps_lrep with cs1; auto.
-    - rewrite H. apply lreps_lrep with cs2; auto.
-  Qed.
-
-    (* 若方程组I与II的解集等价，则称I和II同解 *)
-  Definition sameAnswers {n s1 s2 : nat} (e1 : Eqns n s1) (e2 : Eqns n s2) : Prop :=
-    forall (t : nat) (cs : @vec (@vec tA n) t), isAnswers e1 cs <-> isAnswers e2 cs.
-
-  Lemma sameAnswers_refl : forall {n s} (e : Eqns n s), sameAnswers e e.
-    Proof. intros. hnf. tauto. Qed.
-
-  Lemma sameAnswers_syms : forall {n s1 s2} (e1 : Eqns n s1) (e2 : Eqns n s2),
-    sameAnswers e1 e2 -> sameAnswers e2 e1.
-  Proof. intros. hnf in *. intros. split; intros; apply H; auto. Qed.
-    
-  Lemma sameAnswers_trans :
-    forall {n s1 s2 s3} (e1 : Eqns n s1) (e2 : Eqns n s2) (e3 : Eqns n s3),
-      sameAnswers e1 e2 -> sameAnswers e2 e3 -> sameAnswers e1 e3.
-  Proof.
-    intros. hnf in *. intros. split; intros.
-    apply H0, H; auto. apply H, H0; auto.
-  Qed.
-
-    (* 方程组初等变换 ([i],[j]) 保持同解 *)
-  Lemma sameAnswers_eqnsSwap : forall {n s} (e : Eqns n s) (i j : fin s),
-    sameAnswers e (eqnsSwap e i j).
-  Proof.
-    intros. unfold sameAnswers, isAnswers; intros. split; split; intros.
-    - apply H. apply isAnswer_eqnsSwap_rev in H0. auto.
-    - apply isAnswer_eqnsSwap. apply H; auto.
-    - apply H. apply isAnswer_eqnsSwap; auto.
-    - rewrite <- H in H0. apply isAnswer_eqnsSwap_rev in H0; auto.
-  Qed.  
-
-    (* 方程组初等变换 [i] * K 保持同解 *)
-  Lemma sameAnswers_eqnsScale : forall {n s} (e : Eqns n s) (i : fin s) (K : tA),
-    K <> 0 -> sameAnswers e (eqnsScale e i K).
-  Proof.
-    intros. unfold sameAnswers, isAnswers; intros. split; intros ; split; intros.
-    - apply H0. apply isAnswer_eqnsScale_rev in H1; auto.
-    - apply isAnswer_eqnsScale. apply H0; auto.
-    - apply H0. apply isAnswer_eqnsScale; auto.
-    - apply H0 in H1. apply isAnswer_eqnsScale_rev in H1; auto.
-  Qed.
-
-    (* 方程组初等变换 [j] + [i] * K 保持同解 *)
-  Lemma sameAnswers_eqnsAdd : forall {n s} (e : Eqns n s) (i j : fin s) (K : tA),
-      i <> j -> sameAnswers e (eqnsAdd e i j K).
-  Proof.
-    intros. unfold sameAnswers, isAnswers; intros. split; intros; split; intros.
-    - apply H0. apply isAnswer_eqnsAdd_rev in H1; auto.
-    - apply isAnswer_eqnsAdd. apply H0; auto.
-    - apply H0. apply isAnswer_eqnsAdd; auto.
-    - apply H0 in H1. apply isAnswer_eqnsAdd_rev in H1; auto.
-  Qed.
-
- 
-  (** *** 方程组的系数矩阵 *)
-    (* 取出s个方程的n元线性方程组的系数矩阵 *)
-  Definition coefMat {n s} (e : Eqns n s) : mat s n := mtrans (fst e).
-
-  Lemma coefMat_eqnsSwap :
-    forall {n s} (e : Eqns n s) (i j : 'I_s),
-    coefMat (eqnsSwap e i j) = mrowSwap i j (coefMat e).
-  Proof.
-    intros. unfold coefMat. destruct e as [A B]. simpl.
-    apply meq_iff_mnth; intros a b. unfold mtrans. rewrite vnth_vmap.
-    unfold mrowSwap, eqnsSwap, vswap. auto. 
-  Qed.
-
-  Lemma coefMat_eqnsScale:
-    forall {n s} (e : Eqns n s) (i : 'I_s) (K : tA),
-    coefMat (eqnsScale e i K) = mrowScale i K (coefMat e).
-  Proof.
-    intros. unfold coefMat. destruct e as [A B]. simpl.
-    apply meq_iff_mnth; intros a b. unfold mtrans. rewrite vnth_vmap.
-    unfold mrowScale, eqnsScale, vscale. destruct (a ??= i); fin.
-  Qed.
-
-  Lemma coefMat_eqnsAdd:
-    forall {n s} (e : Eqns n s) (i j: 'I_s) (K : tA),
-    i <> j -> coefMat (eqnsAdd e i j K) = mrowAdd i j K (coefMat e).
-  Proof.
-    intros. unfold coefMat. destruct e as [A B]. simpl.
-    apply meq_iff_mnth; intros a b. unfold mtrans. rewrite vnth_vmap.
-    unfold mrowAdd, eqnsAdd, eqnAdd, vswap, vadde. destruct (a ??= i); fin.
-    repeat f_equal; fin.
-  Qed.
-
-        
-    (* 取出s个方程的n元线性方程组的常数项 *)
-  Definition costMat {n s} (e : Eqns n s) : vec s := snd e.
-
-  Lemma costMat_eqnsSwap :
-    forall {n s} (e : Eqns n s) (i j : 'I_s),
-    costMat (eqnsSwap e i j) = vswap (costMat e) i j .
-  Proof.
-    intros. unfold costMat. destruct e as [A B]. simpl. auto. 
-  Qed.
-
-  Lemma costMat_eqnsScale:
-    forall {n s} (e : Eqns n s) (i : 'I_s) (K : tA),
-    costMat (eqnsScale e i K) = vscale (costMat e) i K.
-  Proof.
-    intros. unfold costMat. destruct e as [A B]. simpl. auto. 
-  Qed.
-
-  Lemma costMat_eqnsAdd:
-    forall {n s} (e : Eqns n s) (i j: 'I_s) (K : tA),
-    costMat (eqnsAdd e i j K) = vadde (costMat e) i j K.
-  Proof.
-    intros. unfold costMat. destruct e as [A B]. simpl. auto.
-  Qed. 
-
-
-  Lemma isAnswer_eq : 
+    Lemma isAnswer_eq : 
     forall {n s} (e : Eqns n s) (c : @vec tA n),
     isAnswer e c <-> c <> vzero /\ coefMat e *v c = costMat e.
   Proof.
@@ -417,28 +356,57 @@ Section SystemOfLinearEquations.
       rewrite !vnth_vmap2. rewrite vnth_vscal. fin.
   Qed.
 
-  Definition toEqns {s n} (A : mat s n) (B: vec s) : Eqns n s :=
-    (mtrans A, B).
+  Definition Answers (n : nat) : Type := (list (@vec tA n)) * (@vec tA n). 
 
-  Lemma toEqns_eq : forall {n s : nat} (e : Eqns n s),
-    e = toEqns (coefMat e) (costMat e).
-  Proof.
-    intros. destruct e as [A B]. unfold coefMat. simpl.
-    unfold toEqns; f_equal.
-  Qed.
+  Definition inAnswers {n : nat} (ans : Answers n) (c : @vec tA n) :=
+  exists (cs : list tA), (fold_right vadd vzero (map2 vscal cs (fst ans))) + (snd ans) = c.
+
+  Definition ansequiv {n : nat} (ans1 : Answers n) (ans2 : Answers n) :=
+    forall c, inAnswers ans1 c <-> inAnswers ans2 c.
+  
+  (* 方程组 e 的所有解组成的集合称为这个方程组的“解集” *)
+  (* 从方程组的解集中，并且还符合实际问题需要的解时，称为“可行解” *)
+  Definition isAnswers {n s} (e : Eqns n s) (ans : Answers n) : Prop :=
+    forall c, isAnswer e c <-> inAnswers ans c.
+
+  
+    (* 若方程组有两个解集，则这两个解集等价 *)
+  Axiom isAnswers_imply_equiv :
+    forall {n s} (e : Eqns n s)
+      (ans1 ans2: Answers n),
+      isAnswers e ans1 -> isAnswers e ans2 -> ansequiv ans1 ans2.
 
 
-  Lemma toEqns_coefMat : forall {n s : nat} (M : mat s n) (v : vec s),
-    coefMat (toEqns M v) = M.
-  Proof.
-    intros. unfold coefMat, toEqns. simpl. apply mtrans_mtrans.
-  Qed.
+    (* 若一个解集与方程组的解集等价，则这个新的解集也是方程组的解集 *)
+  Axiom isAnswers_if_equiv :
+    forall {n s} (e : Eqns n s)
+      (ans1 ans2: Answers n) c,
+      inAnswers ans1 c -> ansequiv ans1 ans2 -> inAnswers ans2 c.
 
-  Lemma toEqns_costMat : forall {n s : nat} (M : mat s n) (v : vec s),
-    costMat (toEqns M v) = v.
-  Proof.
-    intros. unfold costMat, toEqns. auto.
-  Qed.
+    (* 若方程组I与II的解集等价，则称I和II同解 *)
+  Definition sameAnswers {n s1 s2 : nat} (e1 : Eqns n s1) (e2 : Eqns n s2) : Prop :=
+    forall (t : nat) (ans : Answers n), isAnswers e1 ans <-> isAnswers e2 ans.
+
+  Axiom sameAnswers_refl : forall {n s} (e : Eqns n s), sameAnswers e e.
+
+  Axiom sameAnswers_syms : forall {n s1 s2} (e1 : Eqns n s1) (e2 : Eqns n s2),
+    sameAnswers e1 e2 -> sameAnswers e2 e1.
+    
+  Axiom sameAnswers_trans :
+    forall {n s1 s2 s3} (e1 : Eqns n s1) (e2 : Eqns n s2) (e3 : Eqns n s3),
+      sameAnswers e1 e2 -> sameAnswers e2 e3 -> sameAnswers e1 e3.
+
+    (* 方程组初等变换 ([i],[j]) 保持同解 *)
+  Axiom sameAnswers_eqnsSwap : forall {n s} (e : Eqns n s) (i j : fin s),
+    sameAnswers e (eqnsSwap e i j).
+
+    (* 方程组初等变换 [i] * K 保持同解 *)
+  Axiom sameAnswers_eqnsScale : forall {n s} (e : Eqns n s) (i : fin s) (K : tA),
+    K <> 0 -> sameAnswers e (eqnsScale e i K).
+
+    (* 方程组初等变换 [j] + [i] * K 保持同解 *)
+  Axiom sameAnswers_eqnsAdd : forall {n s} (e : Eqns n s) (i j : fin s) (K : tA),
+      i <> j -> sameAnswers e (eqnsAdd e i j K).
 
   Definition rowOps2eqn {n  s : nat} (l : list (@RowOp tA s)) (e : Eqns n (S s))
   : Eqns n (S s) :=
@@ -641,11 +609,45 @@ Section SystemOfLinearEquations.
       destruct H2 as [e'' [H2 H3]]. exists e''. split.
       apply ETtrans with e'; auto. auto.
   Qed.
+  Check fold_left.
 
-  (** 定义基础解系 *)
-  Definition isBasicAnswers {n s t} (e : Eqns n s)
-    (cs : @vec (@vec tA n) t) : Prop :=
-    lindep cs /\ isAnswers e cs.
+  Definition isRREFSolve_helper {r c} (V : @vec 'I_(S c) (S r)) (v : @vec tA (S r)) (x y : nat): @vec tA (S c) :=
+    vset (fold_left
+    (fun v' i => vset v' V.[#i] (- v.[#i]))
+    (seq 0 x) vzero) #y Aone.
+
+
+  Fixpoint isRREFSolve {r c} (M : mat  (S r) (S c)) (b : @vec tA (S r)) (V : @vec 'I_(S c) (S r))(x y : nat) (ans : Answers (S c)) : Answers (S c) :=
+  match x, y with
+  | O, _ => ans
+  | _, O => ans
+  | S x', S y' => 
+    let a := V.[#x'] in
+    if (fin2nat a ??= y') 
+      then isRREFSolve M b V x' y' (fst ans, fun i : 'I_(S c)=> if i ??= x' then b.[#x']%A else (snd ans).[i])
+      else isRREFSolve M b V x y' (cons (isRREFSolve_helper V M&[#y'] x y') (fst ans), snd ans)
+  end.
+
+
+  Fixpoint hasAnswers_aux {r} (b : @vec tA (S r)) (x : nat) : bool :=
+    match x with
+    | O => true
+    | S x' =>
+      if Aeqdec (b.[#(r - x')]) Azero then hasAnswers_aux b x'
+      else false
+    end.
+
+  Definition hasAnswers {r} (b : @vec tA (S r)) (x : nat) : bool :=
+    hasAnswers_aux b (S r - x).
+
+
+  Definition SolveMatrix {r c} (M : mat (S r) (S c)) (b : @vec tA (S r)): (Answers (S c)) :=
+    let '(l, N, num, V) := toRREF' M in
+    let b' := rowOpsInV l b in
+    if hasAnswers b' num then (isRREFSolve N b' V num (S c) (nil, vzero)) else (nil, vzero).
+
+  Definition SolveEqns {n s} (E : Eqns (S n) (S s)) :(Answers (S n)) :=
+    SolveMatrix (coefMat E) (costMat E).
 
 (*
   Lemma isBasicAnswers_imply_equiv :
@@ -688,4 +690,10 @@ Next Obligation. lia. Qed.
 Definition solveAnswers {n s} (e : Eqns (S n) (S s)) :=
   solveAnswers_aux (coefMat e) nil (S n) (S s).
 *)
+
+
   End SystemOfLinearEquations.
+
+  Check isRREFSolve.
+
+  Extraction "ocaml_test/test.ml" SolveMatrix.

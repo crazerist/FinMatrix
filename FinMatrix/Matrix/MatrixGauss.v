@@ -2840,6 +2840,26 @@ Section GaussElim.
     destruct H; fin.
   Qed.
 
+    Fixpoint REF2RREF' {r c} (M : mat (S r) (S c)) (x : nat)  : list RowOp * (mat (S r) (S c)) * nat * @vec 'I_(S c) (S r):=
+    match x with
+    | O => ([], M, O, fun i => fin0)
+    | S x' =>
+      let fx : 'I_(S r) := #x' in
+      match getrowPivot M (S c) fx with
+      | None => REF2RREF' M x'
+      | Some a => 
+        let '(l1, M1, n, V) := REF2RREF' M x' in
+        let (l2, M2) := ElimUp M1 x' fx a in
+        ((l2 ++ l1)%list, M2, S n, fun i : 'I_(S r) => if (i ??= x') then a else V.[i])
+      end
+    end.
+
+
+  Definition toRREF' {r c} (M : mat (S r) (S c)) : list RowOp * (mat (S r) (S c)) * nat * @vec 'I_(S c) (S r) :=
+    let (l1, M1) := toREF M (S r) (S c) in
+    let '(l2, M2, num, V) := REF2RREF' M1 (S r) in
+    ((l2 ++ l1)%list, M2, num, V).
+
 
 
 

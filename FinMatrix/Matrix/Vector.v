@@ -381,6 +381,9 @@ Section l2v_v2l.
   Lemma v2l_eq : forall n (a b : vec n), a = b -> v2l a = v2l b.
   Proof. intros. subst. auto.  Qed.
 
+  Definition lv2dl {n} (l : list (@vec tA n)) : dlist tA :=
+    map v2l l.
+
 End l2v_v2l.
 
 (* ======================================================================= *)
@@ -1900,10 +1903,6 @@ Section vfold.
   Definition vfoldl {n} (a : @vec tA n) (x : tB) (f : tB -> tA -> tB) : tB :=
     seqfoldl (v2f Azero a) n x f.
 
-    Check vfoldl.
-
-  Definition vfoldl {n} (a : @vec tA n) (x : tB) (f : tB -> tA -> tB) : tB :=
-    seqfoldl (v2f Azero a) n x f.
   
   (** ... + (v.(n-1) + (v.n + x)) *)
   Definition vfoldr {n} (a : @vec tA n) (x : tB) (f : tA -> tB -> tB) : tB :=
