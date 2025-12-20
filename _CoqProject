@@ -83,3 +83,4 @@ FinMatrix/Matrix/MatrixC.v
 FinMatrix/Matrix/MatrixRFun.v
 FinMatrix/Matrix/LinearEquations.v
 FinMatrix/Matrix/VectorSpace.v
+FinMatrix/Matrix/extra.v

@@ -1,373 +1,226 @@
+(*
+  Copyright 2024 Zhengpu Shi
+  This file is part of FinMatrix. It is distributed under the MIT
+  "expat license". You should have recieved a LICENSE file with it.
 
-(** val fst : ('a1 * 'a2) -> 'a1 **)
+  purpose   : Test matrix ocaml program which extracted from Coq
+  author    : Zhengpu Shi
+  date      : May 16, 2024
 
-let fst = function
-| (x, _) -> x
+ *)
 
-(** val snd : ('a1 * 'a2) -> 'a2 **)
+(** These indicatos only using in REPL, and need to be removed when compiling *)
+#use "topfind";;
+#require "unix";;
+#use "matrix.ml";;
 
-let snd = function
-| (_, y) -> y
+open Printf
+open Unix
 
-(** val app : 'a1 list -> 'a1 list -> 'a1 list **)
+(* calculate the computation time of executing a function. *)
+let calc_exe_time_core (f : 'a -> unit) (n:'a) : float =
+  let start_time = Sys.time () in
+  let _ = f n in
+  let end_time = Sys.time () in
+  let elapsed = end_time -. start_time in
+  elapsed
 
-let rec app l m =
-  match l with
-  | [] -> m
-  | a :: l1 -> a :: (app l1 m)
+(* calculate the computation time of executing a function, and print time elapsed. *)
+let calc_exe_time (f : 'a -> unit) (n:'a) =
+  let elapsed = calc_exe_time_core f n in
+  printf "Execution of f () takes %6.2f seconds\n" elapsed
+  
+(* Get the current time in seconds with an integer type *)
+let current_time_get () = Float.to_int (Unix.time ())
 
-(** val sub : int -> int -> int **)
+(* Update random generator, using fixed seed or use current time as seed. *)
+let random_update =
+  (* when using fixed seed, the random output every time are same from first start *)
+  (* let seed = 1 in *)
+  (* when using current time as seed, there are better randomness *)
+  let seed = current_time_get () in
+  Random.init seed
 
-let rec sub = fun n m -> Stdlib.max 0 (n-m)
+(* Trim a float number to given length precision.
+   E.g. f 123.45678 2 ==> 123.45 *)
+let float_trim (x : float) (n : int) : float =
+  let coef = 10.0 ** (float_of_int n) in
+  let i = int_of_float (x *. coef) in
+  let x' = (float_of_int i) /. coef in
+  x'
 
-module Nat =
- struct
- end
+(* Generate a float number with default precision *)
+let gen_float () : float =
+  float_trim (Random.float 1.0) 3
 
-(** val fold_left : ('a1 -> 'a2 -> 'a1) -> 'a2 list -> 'a1 -> 'a1 **)
+(* aa : float array array *)
+type aa = float array array;;
 
-let rec fold_left f l a0 =
-  match l with
-  | [] -> a0
-  | b :: t -> fold_left f t (f a0 b)
+(* a : float array *)
+type a = float array;;
 
-(** val fold_right : ('a2 -> 'a1 -> 'a1) -> 'a1 -> 'a2 list -> 'a1 **)
+(* Generate an `aa` with r*c shape *)
+let gen_aa (r:int) (c:int) : aa =
+  random_update;
+  Array.init r (fun _ -> Array.init c (fun _ -> gen_float()));;
 
-let rec fold_right f a0 = function
-| [] -> a0
-| b :: t -> f b (fold_right f a0 t)
+(* Generate an `a` with n shape *)
+let gen_a (n:int) : a =
+  random_update;
+  Array.init n (fun _ -> gen_float());;
 
-(** val seq : int -> int -> int list **)
+(* Get shape of an `aa` *)
+let shape4aa (x:aa) : int * int =
+  (Array.length x, Array.length (Array.get x 0));;
 
-let rec seq start len =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> [])
-    (fun len0 -> start :: (seq (Int.succ start) len0))
-    len
+let shape4a (x:a) : int =
+  Array.length x;;
 
-type 'tA dec =
-  'tA -> 'tA -> bool
-  (* singleton inductive, whose constructor was Build_Dec *)
+(* Convert `float` to string *)
+let float2str (f:float) : string =
+  Printf.sprintf "%8.5f" f
 
-(** val aeqdec : 'a1 dec -> 'a1 -> 'a1 -> bool **)
+let int2str (f:int) : string =
+  Printf.sprintf "%d" f
 
-let aeqdec aeqDec =
-  aeqDec
+(* Convert `float array` to string *)
+let arr2str (a:float array) : string =
+  Array.fold_left (fun s f -> s^(float2str f)) "" a
 
-(** val nat_eq_Dec : int dec **)
+(* Convert an `aa` to string *)
+let aa2str (x:aa) : string =
+  Array.fold_left (fun s a -> s^(arr2str a)^"\n") "" x
+  
+(* Print an `aa` *)
+let prt_aa (x:aa) : unit =
+  print_endline (aa2str x);;
 
-let nat_eq_Dec =
-  (=)
+(* matrix type *)
+type matrix = int * int * (int -> int -> float);;
+type vector = int * (int -> float);;
 
-(** val nat_lt_Dec : int dec **)
+(* Convert `float array array` to matrix *)
+let aa2mat (x:aa) : matrix =
+  let (r,c) = shape4aa x in
+  let f : int->int->float =
+    fun i j -> if (i >= r) || (j >= c) then 0. else Array.get (Array.get x i) j in
+  (r,c,f);;
 
-let nat_lt_Dec =
-  (<)
+(* Convert `float array array` to matrix *)
+let a2vec (x:a) : vector =
+  let n = shape4a x in
+  let f : int->float =
+    fun i -> if (i >= n) then 0. else Array.get x i in
+  (n,f);;
 
-type fin = int
-  (* singleton inductive, whose constructor was Fin *)
+(* Generate a `matrix` with r*c shape *)
+let gen_mat (r:int) (c:int) : matrix =
+  aa2mat (gen_aa r c);;
 
-(** val fin2nat : int -> fin -> int **)
+let gen_vec (n:int) : vector =
+  a2vec (gen_a n);;
 
-let fin2nat _ f =
-  f
+(* Convert `int->float` to string *)
+let f2str (n:int) (f:int->float) : string =
+  let rec loop (i:int) (acc:string) : string =
+    if i < n
+    then loop (i+1) (acc ^ float2str (f i) ^ ",")
+    else acc in
+  loop 0 "";;
 
-(** val fin0 : int -> fin **)
+let f2str_int (n:int) (f:int->int) : string =
+  let rec loop (i:int) (acc:string) : string =
+    if i < n
+    then loop (i+1) (acc ^ int2str (f i))
+    else acc in
+  loop 0 "";;
 
-let fin0 _ =
-  0
+(* Convert `int->int->float` to string *)
+let ff2str (r:int) (c:int) (ff:int->int->float) : string =
+  let rec loop (i:int) (acc:string) : string =
+    if i < r
+    then loop (i+1) (acc ^ f2str c (ff i) ^ "\n")
+    else acc in
+  loop 0 "";;
+  
+(* Print a `matrix` *)
+let prt_mat (prefix:string) (m:matrix) : unit =
+  let (r,c,ff) = m in
+  let s = Printf.sprintf "%s matrix_%dx%d:\n%s" prefix r c (ff2str r c ff) in
+  print_endline s;;
 
-(** val nat2finS : int -> int -> fin **)
+(* Print a `vector *)
+let prt_vec (prefix:string) (v:vector) : unit =
+  let (n,f) = v in
+  let s = Printf.sprintf "%s vector_%d:\n%s" prefix n (f2str n f) in
+  print_endline s;;
 
-let nat2finS n i =
-  let s = nat_lt_Dec i (Int.succ n) in if s then i else 0
+let prt_vec_int (prefix:string) (v:int * (fin -> int)) : unit =
+  let (n,f) = v in
+  let s = Printf.sprintf "%s vector_%d:\n%s" prefix n (f2str_int n f) in
+  print_endline s;;
 
-type 'tA vec = fin -> 'tA
+(** command option processing *)
 
-(** val vrepeat : int -> 'a1 -> 'a1 vec **)
+(* global variables for command options. *)
+let cmdopt_matrix_size : int ref = ref 20
+let cmdopt_show_matrix : bool ref = ref true
 
-let vrepeat _ a _ =
-  a
+let set_matrix_size (i:int)   = cmdopt_matrix_size := i
+let set_show_matrix (b:bool)  = cmdopt_show_matrix := b
 
-(** val vzero : 'a1 -> int -> 'a1 vec **)
-
-let vzero azero n =
-  vrepeat n azero
-
-(** val vset : int -> 'a1 vec -> fin -> 'a1 -> 'a1 vec **)
-
-let vset n a i x j =
-  if nat_eq_Dec (fin2nat n j) (fin2nat n i) then x else a j
-
-(** val vswap : int -> 'a1 vec -> fin -> fin -> 'a1 vec **)
-
-let vswap n a i j k =
-  if nat_eq_Dec (fin2nat n k) (fin2nat n i)
-  then a j
-  else if nat_eq_Dec (fin2nat n k) (fin2nat n j) then a i else a k
-
-(** val mcol : int -> int -> 'a1 vec vec -> fin -> 'a1 vec **)
-
-let mcol _ _ m j i =
-  m i j
-
-(** val mrowScale :
-    ('a1 -> 'a1 -> 'a1) -> int -> int -> fin -> 'a1 -> 'a1 vec vec -> 'a1 vec
-    vec **)
-
-let mrowScale amul m _ x c m0 i j =
-  if nat_eq_Dec (fin2nat m i) (fin2nat m x) then amul c (m0 i j) else m0 i j
-
-(** val mrowAdd :
-    ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> int -> int -> fin -> fin ->
-    'a1 -> 'a1 vec vec -> 'a1 vec vec **)
-
-let mrowAdd aadd amul m _ x y c m0 i j =
-  if nat_eq_Dec (fin2nat m i) (fin2nat m x)
-  then aadd (m0 i j) (amul c (m0 y j))
-  else m0 i j
-
-(** val mrowSwap : int -> int -> fin -> fin -> 'a1 vec vec -> 'a1 vec vec **)
-
-let mrowSwap m _ x y m0 i j =
-  if nat_eq_Dec (fin2nat m i) (fin2nat m x)
-  then m0 y j
-  else if nat_eq_Dec (fin2nat m i) (fin2nat m y) then m0 x j else m0 i j
-
-type 'tA rowOp =
-| ROnop
-| ROswap of fin * fin
-| ROscale of fin * 'tA
-| ROadd of fin * fin * 'tA
-
-(** val getcolPivot :
-    'a1 -> 'a1 dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin option **)
-
-let rec getcolPivot azero hAeqDec r c m x j =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> None)
-    (fun x' ->
-    if aeqdec hAeqDec (m (nat2finS r (sub (Int.succ r) x)) j) azero
-    then getcolPivot azero hAeqDec r c m x' j
-    else Some (nat2finS r (sub (Int.succ r) x)))
-    x
-
-(** val getrowPivot :
-    'a1 -> 'a1 dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin option **)
-
-let rec getrowPivot azero hAeqDec r c m x i =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> None)
-    (fun x' ->
-    if aeqdec hAeqDec (m i (nat2finS c (sub (Int.succ c) x))) azero
-    then getrowPivot azero hAeqDec r c m x' i
-    else Some (nat2finS c (sub (Int.succ c) x)))
-    x
-
-(** val setPivotAone :
-    ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1) -> int -> int -> 'a1 vec vec -> int
-    -> int -> fin -> 'a1 rowOp list * 'a1 vec vec **)
-
-let setPivotAone amul ainv r c m x y a =
-  let i = nat2finS r (sub (Int.succ r) x) in
-  if nat_eq_Dec (fin2nat (Int.succ r) a) (fin2nat (Int.succ r) i)
-  then let op1 = ROnop in
-       let (op2, m2) =
-         let val0 = m i (nat2finS c (sub (Int.succ c) y)) in
-         ((ROscale (i, (ainv val0))),
-         (mrowScale amul (Int.succ r) (Int.succ c) i (ainv val0) m))
-       in
-       ((op2 :: (op1 :: [])), m2)
-  else let op1 = ROswap (a, i) in
-       let m1 = mrowSwap (Int.succ r) (Int.succ c) a i m in
-       let (op2, m2) =
-         let val0 = m1 i (nat2finS c (sub (Int.succ c) y)) in
-         ((ROscale (i, (ainv val0))),
-         (mrowScale amul (Int.succ r) (Int.succ c) i (ainv val0) m1))
-       in
-       ((op2 :: (op1 :: [])), m2)
-
-(** val elimDown :
-    ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
-    dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin -> 'a1 rowOp
-    list * 'a1 vec vec **)
-
-let rec elimDown aadd azero aopp amul hAeqDec r c m x i j =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> ([], m))
-    (fun x' ->
-    let fx = nat2finS r (sub (Int.succ r) x) in
-    let a = m fx j in
-    if aeqdec hAeqDec a azero
-    then elimDown aadd azero aopp amul hAeqDec r c m x' i j
-    else let op1 = ROadd (fx, i, (aopp a)) in
-         let m1 = mrowAdd aadd amul (Int.succ r) (Int.succ c) fx i (aopp a) m
-         in
-         let (l2, m2) = elimDown aadd azero aopp amul hAeqDec r c m1 x' i j in
-         ((app l2 (op1 :: [])), m2))
-    x
-
-(** val elimUp :
-    ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
-    dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin -> 'a1 rowOp
-    list * 'a1 vec vec **)
-
-let rec elimUp aadd azero aopp amul hAeqDec r c m x i j =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> ([], m))
-    (fun x' ->
-    let fx = nat2finS r x' in
-    let a = m fx j in
-    if aeqdec hAeqDec a azero
-    then elimUp aadd azero aopp amul hAeqDec r c m x' i j
-    else let op1 = ROadd (fx, i, (aopp a)) in
-         let m1 = mrowAdd aadd amul (Int.succ r) (Int.succ c) fx i (aopp a) m
-         in
-         let (l2, m2) = elimUp aadd azero aopp amul hAeqDec r c m1 x' i j in
-         ((app l2 (op1 :: [])), m2))
-    x
-
-(** val toREF :
-    ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1
-    -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> int -> int -> 'a1
-    rowOp list * 'a1 vec vec **)
-
-let rec toREF aadd azero aopp amul ainv hAeqDec r c m x y =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> ([], m))
-    (fun x' ->
-    (fun fO fS n -> if n=0 then fO () else fS (n-1))
-      (fun _ -> ([], m))
-      (fun y' ->
-      let i = nat2finS r (sub (Int.succ r) x) in
-      let j = nat2finS c (sub (Int.succ c) y) in
-      (match getcolPivot azero hAeqDec r c m x j with
-       | Some a ->
-         let (l1, m1) = setPivotAone amul ainv r c m x y a in
-         let (l2, m2) = elimDown aadd azero aopp amul hAeqDec r c m1 x' i j in
-         let (l3, m3) = toREF aadd azero aopp amul ainv hAeqDec r c m2 x' y'
-         in
-         ((app l3 (app l2 l1)), m3)
-       | None -> toREF aadd azero aopp amul ainv hAeqDec r c m x y'))
-      y)
-    x
-
-(** val rEF2RREF' :
-    ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
-    dec -> int -> int -> 'a1 vec vec -> int -> (('a1 rowOp list * 'a1 vec
-    vec) * int) * fin vec **)
-
-let rec rEF2RREF' aadd azero aopp amul hAeqDec r c m x =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> ((([], m), 0), (fun _ -> fin0 c)))
-    (fun x' ->
-    let fx = nat2finS r x' in
-    (match getrowPivot azero hAeqDec r c m (Int.succ c) fx with
-     | Some a ->
-       let (p, v) = rEF2RREF' aadd azero aopp amul hAeqDec r c m x' in
-       let (p0, n) = p in
-       let (l1, m1) = p0 in
-       let (l2, m2) = elimUp aadd azero aopp amul hAeqDec r c m1 x' fx a in
-       ((((app l2 l1), m2), (Int.succ n)), (fun i ->
-       if nat_eq_Dec (fin2nat (Int.succ r) i) x' then a else v i))
-     | None -> rEF2RREF' aadd azero aopp amul hAeqDec r c m x'))
-    x
-
-(** val toRREF' :
-    ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1
-    -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> (('a1 rowOp list * 'a1
-    vec vec) * int) * fin vec **)
-
-let toRREF' aadd azero aopp amul ainv hAeqDec r c m =
-  let (l1, m1) =
-    toREF aadd azero aopp amul ainv hAeqDec r c m (Int.succ r) (Int.succ c)
+let read_options () : string =
+  let speclist =
+    [
+      ("-n", Arg.Int set_matrix_size, "Set matrix dimension");
+      ("-print", Arg.Bool set_show_matrix, "Show matrix content?");
+    ]
   in
-  let (p, v) = rEF2RREF' aadd azero aopp amul hAeqDec r c m1 (Int.succ r) in
-  let (p0, num) = p in let (l2, m2) = p0 in ((((app l2 l1), m2), num), v)
+  let usage_msg = "Usage: ./matrix [option] where options are:" in
+  let _ = Arg.parse speclist (fun s -> ()) usage_msg in
+  "";;
 
-type 'tA answers = 'tA vec list * 'tA vec
+let show_hello_msg () =
+  let hello_msg = "Program for test matrix." in
+  print_endline hello_msg
 
-(** val rowOpsInV :
-    ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> int -> 'a1 rowOp list ->
-    'a1 vec -> 'a1 vec **)
+let test_solveEqAM (n:int) (ff : int->int->float) (f : int->float): unit =
+  let am = solveEqAM_R n ff f in
+  prt_vec "solveEqAM=" (n,am);;
 
-let rowOpsInV aadd amul s l v =
-  fold_right (fun op e ->
-    match op with
-    | ROnop -> e
-    | ROswap (i, j) -> vswap (Int.succ s) e i j
-    | ROscale (i, c) ->
-      (fun j ->
-        if nat_eq_Dec (fin2nat (Int.succ s) j) (fin2nat (Int.succ s) i)
-        then amul c (e j)
-        else e j)
-    | ROadd (i, j, c) ->
-      (fun x ->
-        if nat_eq_Dec (fin2nat (Int.succ s) x) (fin2nat (Int.succ s) i)
-        then aadd (e x) (amul c (e j))
-        else e x)) v l
+let test_solveEqGE (n:int) (ff : int->int->float) (f : int->float): unit =
+  let ge = solveEqGE_R n ff f in
+  prt_vec "solveEqGE=" (n,ge);;
 
-(** val isRREFSolve_helper :
-    'a1 -> ('a1 -> 'a1) -> 'a1 -> int -> int -> fin vec -> 'a1 vec -> int ->
-    int -> 'a1 vec **)
+let test_solveMatrix (r:int) (c:int) (ff : int->int->float) (f : int->float): unit =
+  let sm = solveMatrix_R r c ff f in
+  let (fst, snd) = sm in
+  prt_vec "solveMatrix=" (c,snd);;
+  
+let main () =
+  let _ = read_options () in
+  let n = !cmdopt_matrix_size in
+  (* let is_print = !cmdopt_show_matrix in *)
+  show_hello_msg();
+  let m = gen_mat n n in
+  let b = gen_vec n in
+  let (_,_,ff) = m in
+  let (_, f) = b in
+  (* printf "--- A ---\n"; *)
+  prt_mat "A=" (n,n,ff);
+  (* printf "--- b---\n"; *)
+  prt_vec "b=" (n,f);
+  show_hello_msg();
+ 
+  (* printf "--- Testing AM method ---\n"; *)
+  (* calc_exe_time (fun __R -> test_solveEqAM n ff f) (); *)
+  (* printf "--- Testing GE method ---\n"; *)
+  (* calc_exe_time (fun _ -> test_solveEqGE n ff f) (); *)
+  printf "--- Testing SM method ---\n";
+  calc_exe_time (fun _ -> test_solveMatrix n n ff f) ();;
 
-let isRREFSolve_helper azero aopp aone r c v v0 x y =
-  vset (Int.succ c)
-    (fold_left (fun v' i ->
-      vset (Int.succ c) v' (v (nat2finS r i)) (aopp (v0 (nat2finS r i))))
-      (seq 0 x) (vzero azero (Int.succ c))) (nat2finS c y) aone
 
-(** val isRREFSolve :
-    'a1 -> ('a1 -> 'a1) -> 'a1 -> int -> int -> 'a1 vec vec -> 'a1 vec -> fin
-    vec -> int -> int -> 'a1 answers -> 'a1 answers **)
 
-let rec isRREFSolve azero aopp aone r c m b v x y ans =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> ans)
-    (fun x' ->
-    (fun fO fS n -> if n=0 then fO () else fS (n-1))
-      (fun _ -> ans)
-      (fun y' ->
-      let a = v (nat2finS r x') in
-      if nat_eq_Dec (fin2nat (Int.succ c) a) y'
-      then isRREFSolve azero aopp aone r c m b v x' y' ((fst ans), (fun i ->
-             if nat_eq_Dec (fin2nat (Int.succ c) i) x'
-             then b (nat2finS r x')
-             else snd ans i))
-      else isRREFSolve azero aopp aone r c m b v x y'
-             (((isRREFSolve_helper azero aopp aone r c v
-                 (mcol (Int.succ r) (Int.succ c) m (nat2finS c y')) x y') :: 
-             (fst ans)), (snd ans)))
-      y)
-    x
 
-(** val hasAnswers_aux : 'a1 -> 'a1 dec -> int -> 'a1 vec -> int -> bool **)
-
-let rec hasAnswers_aux azero aeqDec r b x =
-  (fun fO fS n -> if n=0 then fO () else fS (n-1))
-    (fun _ -> true)
-    (fun x' ->
-    if aeqdec aeqDec (b (nat2finS r (sub r x'))) azero
-    then hasAnswers_aux azero aeqDec r b x'
-    else false)
-    x
-
-(** val hasAnswers : 'a1 -> 'a1 dec -> int -> 'a1 vec -> int -> bool **)
-
-let hasAnswers azero aeqDec r b x =
-  hasAnswers_aux azero aeqDec r b (sub (Int.succ r) x)
-
-(** val solveMatrix :
-    ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
-    -> ('a1 -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> 'a1 vec -> 'a1
-    answers **)
-
-let solveMatrix aadd azero aopp amul aone ainv aeqDec r c m b =
-  let (p, v) = toRREF' aadd azero aopp amul ainv aeqDec r c m in
-  let (p0, num) = p in
-  let (l, n) = p0 in
-  let b' = rowOpsInV aadd amul r l b in
-  if hasAnswers azero aeqDec r b' num
-  then isRREFSolve azero aopp aone r c n b' v num (Int.succ c) ([],
-         (vzero azero (Int.succ c)))
-  else ([], (vzero azero (Int.succ c)))
+main ();;
+       

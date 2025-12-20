@@ -56,14 +56,25 @@ let gen_float () : float =
 (* aa : float array array *)
 type aa = float array array;;
 
+(* a : float array *)
+type a = float array;;
+
 (* Generate an `aa` with r*c shape *)
 let gen_aa (r:int) (c:int) : aa =
   random_update;
   Array.init r (fun _ -> Array.init c (fun _ -> gen_float()));;
 
+(* Generate an `a` with n shape *)
+let gen_a (n:int) : a =
+  random_update;
+  Array.init n (fun _ -> gen_float());;
+
 (* Get shape of an `aa` *)
 let shape4aa (x:aa) : int * int =
   (Array.length x, Array.length (Array.get x 0));;
+
+let shape4a (x:a) : int =
+  Array.length x;;
 
 (* Convert `float` to string *)
 let float2str (f:float) : string =
@@ -83,6 +94,7 @@ let prt_aa (x:aa) : unit =
 
 (* matrix type *)
 type matrix = int * int * (int -> int -> float);;
+type vector = int * (int -> float);;
 
 (* Convert `float array array` to matrix *)
 let aa2mat (x:aa) : matrix =
@@ -91,9 +103,19 @@ let aa2mat (x:aa) : matrix =
     fun i j -> if (i >= r) || (j >= c) then 0. else Array.get (Array.get x i) j in
   (r,c,f);;
 
+(* Convert `float array array` to matrix *)
+let a2vec (x:a) : vector =
+  let n = shape4a x in
+  let f : int->float =
+    fun i -> if (i >= n) then 0. else Array.get x i in
+  (n,f);;
+
 (* Generate a `matrix` with r*c shape *)
 let gen_mat (r:int) (c:int) : matrix =
   aa2mat (gen_aa r c);;
+
+let gen_vec (n:int) : vector =
+  a2vec (gen_a n);;
 
 (* Convert `int->float` to string *)
 let f2str (n:int) (f:int->float) : string =
@@ -117,45 +139,26 @@ let prt_mat (prefix:string) (m:matrix) : unit =
   let s = Printf.sprintf "%s matrix_%dx%d:\n%s" prefix r c (ff2str r c ff) in
   print_endline s;;
 
-(* matrix multiplication *)
-let mmul_R (m1:matrix) (m2:matrix) : matrix =
-  let (r1,c1,f1) = m1 in
-  let (r2,c2,f2) = m2 in
-  (r1,c2, mmul0 r1 c1 c2 f1 f2);;
-
-(* matrix inversion by GE *)
-let minvGE_R (m:matrix) : matrix =
-  let (r,c,f) = m in
-  (r,c, minvGE r f);;
-
-(* matrix inversion by AM *)
-let minvAM_R (m:matrix) : matrix =
-  let (r,c,f) = m in
-  (r,c, minvAM r f);;
+(* Print a `vector *)
+let prt_vec (prefix:string) (v:vector) : unit =
+  let (n,f) = v in
+  let s = Printf.sprintf "%s vector_%d:\n%s" prefix n (f2str n f) in
+  print_endline s;;
 
 (** command option processing *)
 
 (* global variables for command options. *)
-let cmdopt_matrix_size : int ref = ref 5
+let cmdopt_matrix_size : int ref = ref 9
 let cmdopt_show_matrix : bool ref = ref true
-let cmdopt_test_mmul : bool ref = ref false
-let cmdopt_test_GE : bool ref = ref false
-let cmdopt_test_AM : bool ref = ref false
 
 let set_matrix_size (i:int)   = cmdopt_matrix_size := i
 let set_show_matrix (b:bool)  = cmdopt_show_matrix := b
-let set_test_mmul (b:bool)  = cmdopt_test_mmul := b
-let set_test_GE (b:bool)  = cmdopt_test_GE := b
-let set_test_AM (b:bool)  = cmdopt_test_AM := b
 
 let read_options () : string =
   let speclist =
     [
       ("-n", Arg.Int set_matrix_size, "Set matrix dimension");
       ("-print", Arg.Bool set_show_matrix, "Show matrix content?");
-      ("-mmul", Arg.Bool set_test_mmul, "Is test matrix multiplication?");
-      ("-GE", Arg.Bool set_test_GE, "Is test minvGE?");
-      ("-AM", Arg.Bool set_test_AM, "Is test minvAE?");
     ]
   in
   let usage_msg = "Usage: ./matrix [option] where options are:" in
@@ -166,47 +169,42 @@ let show_hello_msg () =
   let hello_msg = "Program for test matrix." in
   print_endline hello_msg
 
-(* test matrix multiplication *)
-let test_mmul (n:int) : unit =
-  let m1 = gen_mat n n in
-  let m2 = gen_mat n n in
-  let m3 = mmul_R m1 m2 in
-  
-  (* let (r,c,ff) = m3 in
-   * print_endline (Printf.sprintf "m3(0,0)=%s" (float2str (ff 0 0)));; *)
+let test_solveEqAM (n:int) (ff : int->int->float) (f : int->float): unit =
+  let am = solveEqAM_R n ff f in
+  prt_vec "solveEqAM=" (n,am);;
 
-  print_endline "Test matrix multiplication:";
-  prt_mat "m1=" m1;
-  prt_mat "m2=" m2;
-  prt_mat "m1*m2=" m3;;
+let test_solveEqGE (n:int) (ff : int->int->float) (f : int->float): unit =
+  let ge = solveEqGE_R n ff f in
+  prt_vec "solveEqGE=" (n,ge);;
 
-(* test inverse matrix by GE *)
-let test_minvGE (n:int) : unit =
-  let m = gen_mat n n in
-  let m' = minvGE_R m in
-  print_endline "Test matrix inversion GE";
-  prt_mat "m=" m;
-  prt_mat "m'" m';;
-
-(* test inverse matrix by AM *)
-let test_minvAM (n:int) : unit =
-  let m = gen_mat n n in
-  let m' = minvAM_R m in
-  print_endline "Test matrix inversion AM";
-  prt_mat "m=" m;
-  prt_mat "m'" m';;
+let test_solveMatrix (r:int) (c:int) (ff : int->int->float) (f : int->float): unit =
+  let sm = solveMatrix_R r c ff f in
+  let (fst, snd) = sm in
+  prt_vec "solveMatrix=" (c,snd);;
   
 let main () =
   let _ = read_options () in
   let n = !cmdopt_matrix_size in
-  let is_test_mmul = !cmdopt_test_mmul in
-  let is_test_GE = !cmdopt_test_GE in
-  let is_test_AM = !cmdopt_test_AM in
   (* let is_print = !cmdopt_show_matrix in *)
-  show_hello_msg ();
-  if is_test_mmul then test_mmul n;
-  if is_test_GE then test_minvGE n;
-  if is_test_AM then test_minvAM n;;
-  
+  show_hello_msg();
+  let m = gen_mat n n in
+  let b = gen_vec n in
+  let (_,_,ff) = m in
+  let (_, f) = b in
+  let (_,ff',l, _) = toRREF'_R n n ff in
+
+  show_hello_msg();
+
+  (* printf "--- Testing AM method ---\n"; *)
+  (* calc_exe_time (fun __R -> test_solveEqAM n ff f) (); *)
+  printf "--- Testing GE method ---\n";
+  calc_exe_time (fun _ -> test_solveEqGE n ff f) ();;
+  printf "--- Testing SM method ---\n";
+  calc_exe_time (fun _ -> test_solveMatrix n n ff f) ();;
+
+
+
+
+
 main ();;
        

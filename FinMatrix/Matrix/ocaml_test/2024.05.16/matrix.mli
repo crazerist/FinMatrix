@@ -1,6 +1,12 @@
 
 type __ = Obj.t
 
+val negb : bool -> bool
+
+val fst : ('a1 * 'a2) -> 'a1
+
+val snd : ('a1 * 'a2) -> 'a2
+
 val app : 'a1 list -> 'a1 list -> 'a1 list
 
 type comparison =
@@ -19,11 +25,17 @@ val add : int -> int -> int
 
 val sub : int -> int -> int
 
+val even : int -> bool
+
+val odd : int -> bool
+
 module Nat :
  sig
   val add : int -> int -> int
 
   val mul : int -> int -> int
+
+  val ltb : int -> int -> bool
 
   val even : int -> bool
 
@@ -98,7 +110,13 @@ module Coq_Pos :
 
 val nth : int -> 'a1 list -> 'a1 -> 'a1
 
+val rev : 'a1 list -> 'a1 list
+
+val concat : 'a1 list list -> 'a1 list
+
 val map : ('a1 -> 'a2) -> 'a1 list -> 'a2 list
+
+val fold_left : ('a1 -> 'a2 -> 'a1) -> 'a2 list -> 'a1 -> 'a1
 
 val fold_right : ('a2 -> 'a1 -> 'a1) -> 'a1 -> 'a2 list -> 'a1
 
@@ -169,12 +187,6 @@ module type RbaseSymbolsSig =
 module RbaseSymbolsImpl :
  RbaseSymbolsSig
 
-val iPR_2 : positive -> RbaseSymbolsImpl.coq_R
-
-val iPR : positive -> RbaseSymbolsImpl.coq_R
-
-val iZR : z -> RbaseSymbolsImpl.coq_R
-
 module type RinvSig =
  sig
   val coq_Rinv : RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R
@@ -185,33 +197,38 @@ module RinvImpl :
 
 val req_dec_T : RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R -> bool
 
-type 'a dec = 'a -> 'a -> bool
+type 'tA dec =
+  'tA -> 'tA -> bool
   (* singleton inductive, whose constructor was Build_Dec *)
 
 val aeqdec : 'a1 dec -> 'a1 -> 'a1 -> bool
 
-val req_Dec : RbaseSymbolsImpl.coq_R dec
-
 val nat_eq_Dec : int dec
 
 val nat_lt_Dec : int dec
+
+val req_Dec : RbaseSymbolsImpl.coq_R dec
 
 type fin = int
   (* singleton inductive, whose constructor was Fin *)
 
 val fin2nat : int -> fin -> int
 
+val fin0 : int -> fin
+
 val nat2finS : int -> int -> fin
 
 val nat2fin : int -> int -> fin
-
-val finseq : int -> fin list
 
 val seqsumAux : ('a1 -> 'a1 -> 'a1) -> int -> (int -> 'a1) -> 'a1 -> 'a1
 
 val seqsum : ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> (int -> 'a1) -> 'a1
 
-type 'a vec = fin -> 'a
+val seqprodAux : ('a1 -> 'a1 -> 'a1) -> int -> (int -> 'a1) -> 'a1 -> 'a1
+
+val seqprod : ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> (int -> 'a1) -> 'a1
+
+type 'tA vec = fin -> 'tA
 
 val vrepeat : int -> 'a1 -> 'a1 vec
 
@@ -219,202 +236,181 @@ val vzero : 'a1 -> int -> 'a1 vec
 
 val v2f : 'a1 -> int -> 'a1 vec -> int -> 'a1
 
-val l2v : 'a1 -> int -> 'a1 list -> 'a1 vec
+val vmap : int -> ('a1 -> 'a2) -> 'a1 vec -> 'a2 vec
 
-val v2l : int -> 'a1 vec -> 'a1 list
+val vmap2 : int -> ('a1 -> 'a2 -> 'a3) -> 'a1 vec -> 'a2 vec -> 'a3 vec
 
-val vmap : ('a1 -> 'a2) -> int -> 'a1 vec -> 'a2 vec
+val vset : int -> 'a1 vec -> fin -> 'a1 -> 'a1 vec
 
-val vmap2 : ('a1 -> 'a2 -> 'a3) -> int -> 'a1 vec -> 'a2 vec -> 'a3 vec
+val vswap : int -> 'a1 vec -> fin -> fin -> 'a1 vec
 
 val vsum : ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> 'a1 vec -> 'a1
 
 val vdot :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1 -> 'a1) -> int -> 'a1 vec -> 'a1 vec -> 'a1
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1 -> 'a1) -> int -> 'a1 vec -> 'a1
+  vec -> 'a1
 
-val m2l : int -> int -> 'a1 vec vec -> 'a1 list list
+val mcol : int -> int -> 'a1 vec vec -> fin -> 'a1 vec
 
-val l2m : 'a1 -> int -> int -> 'a1 list list -> 'a1 vec vec
+val m2f : 'a1 -> int -> int -> 'a1 vec vec -> int -> int -> 'a1
 
 val mat1 : 'a1 -> 'a1 -> int -> 'a1 vec vec
 
-val mcmul : ('a1 -> 'a1 -> 'a1) -> int -> int -> 'a1 -> 'a1 vec vec -> 'a1 vec vec
+val mscal :
+  ('a1 -> 'a1 -> 'a1) -> int -> int -> 'a1 -> 'a1 vec vec -> 'a1 vec vec
 
-val mmul :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1 -> 'a1) -> int -> int -> int -> 'a1 vec vec ->
-  'a1 vec vec -> 'a1 vec vec
+val mmulv :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1 -> 'a1) -> int -> int -> 'a1 vec
+  vec -> 'a1 vec -> 'a1 vec
 
-val mrowScale : ('a1 -> 'a1 -> 'a1) -> int -> fin -> 'a1 -> 'a1 vec vec -> 'a1 vec vec
+val mrowScale :
+  ('a1 -> 'a1 -> 'a1) -> int -> int -> fin -> 'a1 -> 'a1 vec vec -> 'a1 vec
+  vec
 
 val mrowAdd :
-  ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> int -> fin -> fin -> 'a1 -> 'a1 vec vec ->
-  'a1 vec vec
+  ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> int -> int -> fin -> fin ->
+  'a1 -> 'a1 vec vec -> 'a1 vec vec
 
-val mrowSwap : int -> fin -> fin -> 'a1 vec vec -> 'a1 vec vec
+val mrowSwap : int -> int -> fin -> fin -> 'a1 vec vec -> 'a1 vec vec
 
-module NormedOrderedFieldElementTypeR :
+type 'tA rowOp =
+| ROnop
+| ROswap of fin * fin
+| ROscale of fin * 'tA
+| ROadd of fin * fin * 'tA
+
+val rowOps2mat :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> 'a1
+  rowOp list -> 'a1 vec vec
+
+val getcolPivot :
+  'a1 -> 'a1 dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin option
+
+val getrowPivot :
+  'a1 -> 'a1 dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin option
+
+val smElimDown :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
+  dec -> int -> 'a1 vec vec -> int -> fin -> 'a1 rowOp list * 'a1 vec vec
+
+val sm2REF :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1
+  -> 'a1) -> 'a1 dec -> int -> 'a1 vec vec -> int -> ('a1 rowOp list * 'a1
+  vec vec) option
+
+val smElimUp :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
+  dec -> int -> 'a1 vec vec -> int -> fin -> 'a1 rowOp list * 'a1 vec vec
+
+val sm2RREF :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
+  dec -> int -> 'a1 vec vec -> int -> 'a1 rowOp list * 'a1 vec vec
+
+val setPivotAone :
+  ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1) -> int -> int -> 'a1 vec vec -> int ->
+  int -> fin -> 'a1 rowOp list * 'a1 vec vec
+
+val elimDown :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
+  dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin -> 'a1 rowOp
+  list * 'a1 vec vec
+
+val elimUp :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
+  dec -> int -> int -> 'a1 vec vec -> int -> fin -> fin -> 'a1 rowOp
+  list * 'a1 vec vec
+
+val toREF :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1
+  -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> int -> int -> 'a1 rowOp
+  list * 'a1 vec vec
+
+val rEF2RREF' :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
+  dec -> int -> int -> 'a1 vec vec -> int -> (('a1 rowOp list * 'a1 vec
+  vec) * int) * fin vec
+
+val toRREF' :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1
+  -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> (('a1 rowOp list * 'a1
+  vec vec) * int) * fin vec
+
+type 'tA answers = 'tA vec list * 'tA vec
+
+val rowOpsInV' :
+  ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> int -> 'a1 rowOp list -> 'a1
+  vec -> 'a1 vec
+
+val isRREFSolve_helper :
+  'a1 -> ('a1 -> 'a1) -> 'a1 -> int -> int -> fin vec -> 'a1 vec -> int ->
+  int -> 'a1 vec
+
+val isRREFSolve :
+  'a1 -> ('a1 -> 'a1) -> 'a1 -> int -> int -> 'a1 vec vec -> 'a1 vec -> fin
+  vec -> int -> int -> 'a1 answers -> 'a1 answers
+
+val hasAnswers_aux : 'a1 -> 'a1 dec -> int -> 'a1 vec -> int -> bool
+
+val hasAnswers : 'a1 -> 'a1 dec -> int -> 'a1 vec -> int -> bool
+
+val solveMatrix :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  ('a1 -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> 'a1 vec -> 'a1 vec
+  list * 'a1 vec
+
+module Coq_method3 :
  sig
-  type coq_A = RbaseSymbolsImpl.coq_R
+  val perm1 : 'a1 -> 'a1 list -> 'a1 list list
 
-  val coq_Azero : coq_A
-
-  val coq_AeqDec : coq_A dec
-
-  val coq_Aadd : RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R
-
-  val coq_Aone : coq_A
-
-  val coq_Aopp : RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R
-
-  val coq_Amul : RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R
-
-  val coq_Ainv : RbaseSymbolsImpl.coq_R -> RbaseSymbolsImpl.coq_R
+  val perm : 'a1 list -> 'a1 list list
  end
+
+val ronum1 : ('a1 -> 'a1 -> bool) -> 'a1 -> 'a1 list -> int
+
+val ronum : ('a1 -> 'a1 -> bool) -> 'a1 list -> int
+
+val mdet :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  int -> 'a1 vec vec -> 'a1
 
 val msubmat : int -> 'a1 vec vec -> fin -> fin -> 'a1 vec vec
 
-val mdetEx :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> 'a1 vec
-  vec -> 'a1
+val mminor :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  int -> 'a1 vec vec -> fin -> fin -> 'a1
 
-val mcofactorEx :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> 'a1 vec
-  vec -> fin -> fin -> 'a1
+val mcofactor :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  int -> 'a1 vec vec -> fin -> fin -> 'a1
 
 val madj :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> 'a1 vec
-  vec -> 'a1 vec vec
-
-val minvtbleb :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> 'a1 dec -> int
-  -> 'a1 vec vec -> bool
-
-val minvo :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1)
-  -> 'a1 dec -> int -> 'a1 vec vec -> 'a1 vec vec option
-
-val minv :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1)
-  -> 'a1 dec -> int -> 'a1 vec vec -> 'a1 vec vec
-
-type 'a rowOp =
-| ROnop
-| ROswap of fin * fin
-| ROscale of fin * 'a
-| ROadd of fin * fin * 'a
-
-val rowOps2mat :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> int -> 'a1 rowOp list -> 'a1
-  vec vec
-
-val getcolPivot : 'a1 -> 'a1 dec -> int -> 'a1 vec vec -> int -> fin -> fin option
-
-val smElimDown :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 dec -> int -> 'a1
-  vec vec -> int -> fin -> 'a1 rowOp list * 'a1 vec vec
-
-val rowisREF :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1) -> 'a1
-  dec -> int -> 'a1 vec vec -> int -> ('a1 rowOp list * 'a1 vec vec) option
-
-val smElimUp :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 dec -> int -> 'a1
-  vec vec -> int -> fin -> 'a1 rowOp list * 'a1 vec vec
-
-val minRowisREF :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 dec -> int -> 'a1
-  vec vec -> int -> 'a1 rowOp list * 'a1 vec vec
-
-val minvtbleb0 :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1) -> 'a1
-  dec -> int -> 'a1 vec vec -> bool
-
-val minvo0 :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1)
-  -> 'a1 dec -> int -> 'a1 vec vec -> 'a1 vec vec option
-
-val minv0 :
-  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1)
-  -> 'a1 dec -> int -> 'a1 vec vec -> 'a1 vec vec
-
-val mmul0 :
-  int -> int -> int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-  NormedOrderedFieldElementTypeR.coq_A vec vec -> NormedOrderedFieldElementTypeR.coq_A vec
-  vec
-
-module GE :
- sig
-  module MinvCore_inst :
-   sig
-    val minvtbleb : int -> NormedOrderedFieldElementTypeR.coq_A vec vec -> bool
-
-    val minvo :
-      int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-      NormedOrderedFieldElementTypeR.coq_A vec vec option
-
-    val minv :
-      int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-      NormedOrderedFieldElementTypeR.coq_A vec vec
-   end
-
-  module Minv_inst :
-   sig
-    val minvList :
-      int -> NormedOrderedFieldElementTypeR.coq_A list list ->
-      NormedOrderedFieldElementTypeR.coq_A list list
-   end
- end
-
-module OrthAM :
- sig
-  module AM :
-   sig
-    module MinvCore_inst :
-     sig
-      val minvtbleb : int -> NormedOrderedFieldElementTypeR.coq_A vec vec -> bool
-
-      val minvo :
-        int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-        NormedOrderedFieldElementTypeR.coq_A vec vec option
-
-      val minv :
-        int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-        NormedOrderedFieldElementTypeR.coq_A vec vec
-     end
-
-    module Minv_inst :
-     sig
-      val minvList :
-        int -> NormedOrderedFieldElementTypeR.coq_A list list ->
-        NormedOrderedFieldElementTypeR.coq_A list list
-     end
-   end
- end
-
-val minvtblebGE : int -> NormedOrderedFieldElementTypeR.coq_A vec vec -> bool
-
-val minvoGE :
-  int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-  NormedOrderedFieldElementTypeR.coq_A vec vec option
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  int -> 'a1 vec vec -> 'a1 vec vec
 
 val minvGE :
-  int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-  NormedOrderedFieldElementTypeR.coq_A vec vec
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  ('a1 -> 'a1) -> 'a1 dec -> int -> 'a1 vec vec -> 'a1 vec vec
 
-val minvListGE :
-  int -> NormedOrderedFieldElementTypeR.coq_A list list ->
-  NormedOrderedFieldElementTypeR.coq_A list list
-
-val minvtblebAM : int -> NormedOrderedFieldElementTypeR.coq_A vec vec -> bool
-
-val minvoAM :
-  int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-  NormedOrderedFieldElementTypeR.coq_A vec vec option
+val solveEqGE :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  ('a1 -> 'a1) -> 'a1 dec -> int -> 'a1 vec vec -> 'a1 vec -> 'a1 vec
 
 val minvAM :
-  int -> NormedOrderedFieldElementTypeR.coq_A vec vec ->
-  NormedOrderedFieldElementTypeR.coq_A vec vec
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  ('a1 -> 'a1) -> int -> 'a1 vec vec -> 'a1 vec vec
 
-val minvListAM :
-  int -> NormedOrderedFieldElementTypeR.coq_A list list ->
-  NormedOrderedFieldElementTypeR.coq_A list list
+val solveEqAM :
+  ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
+  ('a1 -> 'a1) -> int -> 'a1 vec vec -> 'a1 vec -> 'a1 vec
+
+val solveEqAM_R :
+  int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R vec ->
+  RbaseSymbolsImpl.coq_R vec
+
+val solveEqGE_R :
+  int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R vec ->
+  RbaseSymbolsImpl.coq_R vec
+
+val solveMatrix_R :
+  int -> int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R vec
+  -> RbaseSymbolsImpl.coq_R vec list * RbaseSymbolsImpl.coq_R vec

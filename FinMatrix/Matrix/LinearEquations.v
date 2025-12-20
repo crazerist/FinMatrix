@@ -489,6 +489,16 @@ Section SystemOfLinearEquations.
       | ROadd i j c => fun x : 'I_(S s) => if x ??= i then (Aadd e.[x] (Amul c e.[j])) else e.[x]
       end) V l.
 
+    Definition rowOpsInV' {s : nat} (l : list (@RowOp tA s)) (V: vec (S s))
+  : vec (S s) :=
+    fold_left (fun e op =>
+      match op with
+      | ROnop => e
+      | ROswap i j => vswap e i j
+      | ROscale i c => fun j : 'I_(S s) => if j ??= i then (Amul c e.[j]) else e.[j]
+      | ROadd i j c => fun x : 'I_(S s) => if x ??= i then (Aadd e.[x] (Amul c e.[j])) else e.[x]
+      end) (rev l) V.
+
   Lemma rowOpsInV_app :
     forall { s} (l1 l2 : list (@RowOp tA s)) (V: vec (S s)),
     rowOpsInV (l1 ++ l2) V = rowOpsInV l1 (rowOpsInV l2 V).
@@ -624,7 +634,7 @@ Section SystemOfLinearEquations.
   | S x', S y' => 
     let a := V.[#x'] in
     if (fin2nat a ??= y') 
-      then isRREFSolve M b V x' y' (fst ans, fun i : 'I_(S c)=> if i ??= x' then b.[#x']%A else (snd ans).[i])
+      then isRREFSolve M b V x' y' (fst ans, fun i : 'I_(S c)=> if i ??= a then b.[#x']%A else (snd ans).[i])
       else isRREFSolve M b V x y' (cons (isRREFSolve_helper V M&[#y'] x y') (fst ans), snd ans)
   end.
 
@@ -640,13 +650,12 @@ Section SystemOfLinearEquations.
   Definition hasAnswers {r} (b : @vec tA (S r)) (x : nat) : bool :=
     hasAnswers_aux b (S r - x).
 
-
-  Definition SolveMatrix {r c} (M : mat (S r) (S c)) (b : @vec tA (S r)): (Answers (S c)) :=
+  Definition SolveMatrix {r c} (M : mat (S r) (S c)) (b : @vec tA (S r)): (list (@vec tA (S c))) * (@vec tA (S c)) :=
     let '(l, N, num, V) := toRREF' M in
     let b' := rowOpsInV l b in
     if hasAnswers b' num then (isRREFSolve N b' V num (S c) (nil, vzero)) else (nil, vzero).
 
-  Definition SolveEqns {n s} (E : Eqns (S n) (S s)) :(Answers (S n)) :=
+  Definition SolveEqns {n s} (E : Eqns (S n) (S s)) :(list (@vec tA (S n))) * (@vec tA (S n)) :=
     SolveMatrix (coefMat E) (costMat E).
 
 (*
@@ -696,4 +705,3 @@ Definition solveAnswers {n s} (e : Eqns (S n) (S s)) :=
 
   Check isRREFSolve.
 
-  Extraction "ocaml_test/test.ml" SolveMatrix.

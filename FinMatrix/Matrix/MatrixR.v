@@ -25,7 +25,7 @@
 
 Require Export RExt RFunExt.
 Require Export MatrixModule.
-Require Export MatrixGauss.
+Require Export LinearEquations.
 
 (* Make sure sqrt:R->R, Hierarchy.le_trans *)
 Export Hierarchy R_sqrt.
@@ -39,23 +39,6 @@ Include (NormedOrderedFieldMatrixTheory NormedOrderedFieldElementTypeR).
 Open Scope R_scope.
 Open Scope vec_scope.
 Open Scope mat_scope.
-
-
-Extraction "ocaml_test/matrix.ml" toRREF.
-
-
-(* ############################################################################ *)
-(** * OCaml Extraction of matrix inversion *)
-
-(* Recursive Extraction *)
-(*   mmul *)
-(*   minvtblebGE minvoGE minvGE minvListGE *)
-(*   minvtblebAM minvoAM minvAM minvListAM. *)
-
-(* Extraction "ocaml_test/matrix.ml" *)
-(*   mmul *)
-(*   minvtblebGE minvoGE minvGE minvListGE *)
-(*   minvtblebAM minvoAM minvAM minvListAM. *)
 
 
 (* ######################################################################### *)
@@ -2228,3 +2211,4 @@ Module Exercise_Ch1_Symbol.
   (** 6.(5), it is an infinite structure, need more work, later... *)
 
 End Exercise_Ch1_Symbol.
+

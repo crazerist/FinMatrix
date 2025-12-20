@@ -353,8 +353,8 @@ val hasAnswers : 'a1 -> 'a1 dec -> int -> 'a1 vec -> int -> bool
 
 val solveMatrix :
   ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1 ->
-  ('a1 -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> 'a1 vec -> 'a1 vec
-  list * 'a1 vec
+  ('a1 -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> 'a1 vec -> 'a1
+  answers
 
 module Coq_method3 :
  sig
@@ -409,14 +409,10 @@ val solveEqGE_R :
   int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R vec ->
   RbaseSymbolsImpl.coq_R vec
 
+val solveMatrix_R_aux :
+  int -> int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R vec
+  -> RbaseSymbolsImpl.coq_R answers
+
 val solveMatrix_R :
   int -> int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R vec
-  -> RbaseSymbolsImpl.coq_R vec list * RbaseSymbolsImpl.coq_R vec
-
-val toRREF'_R :
-  int -> int -> RbaseSymbolsImpl.coq_R vec vec -> ((RbaseSymbolsImpl.coq_R
-  rowOp list * RbaseSymbolsImpl.coq_R vec vec) * int) * fin vec
-
-val rowOpsInV_R :
-  int -> RbaseSymbolsImpl.coq_R rowOp list -> RbaseSymbolsImpl.coq_R vec ->
-  RbaseSymbolsImpl.coq_R vec
+  -> RbaseSymbolsImpl.coq_R vec

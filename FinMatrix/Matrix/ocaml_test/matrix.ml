@@ -375,12 +375,6 @@ let rec nth n l default =
               | _ :: t -> nth m t default)
     n
 
-(** val rev : 'a1 list -> 'a1 list **)
-
-let rec rev = function
-| [] -> []
-| x :: l' -> app (rev l') (x :: [])
-
 (** val concat : 'a1 list list -> 'a1 list **)
 
 let rec concat = function
@@ -1153,12 +1147,12 @@ let toRREF' aadd azero aopp amul ainv hAeqDec r c m =
 
 type 'tA answers = 'tA vec list * 'tA vec
 
-(** val rowOpsInV' :
+(** val rowOpsInV :
     ('a1 -> 'a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> int -> 'a1 rowOp list ->
     'a1 vec -> 'a1 vec **)
 
-let rowOpsInV' aadd amul s l v =
-  fold_left (fun e op ->
+let rowOpsInV aadd amul s l v =
+  fold_right (fun op e ->
     match op with
     | ROnop -> e
     | ROswap (i, j) -> vswap (Int.succ s) e i j
@@ -1171,7 +1165,7 @@ let rowOpsInV' aadd amul s l v =
       (fun x ->
         if nat_eq_Dec (fin2nat (Int.succ s) x) (fin2nat (Int.succ s) i)
         then aadd (e x) (amul c (e j))
-        else e x)) (rev l) v
+        else e x)) v l
 
 (** val isRREFSolve_helper :
     'a1 -> ('a1 -> 'a1) -> 'a1 -> int -> int -> fin vec -> 'a1 vec -> int ->
@@ -1226,13 +1220,13 @@ let hasAnswers azero aeqDec r b x =
 (** val solveMatrix :
     ('a1 -> 'a1 -> 'a1) -> 'a1 -> ('a1 -> 'a1) -> ('a1 -> 'a1 -> 'a1) -> 'a1
     -> ('a1 -> 'a1) -> 'a1 dec -> int -> int -> 'a1 vec vec -> 'a1 vec -> 'a1
-    vec list * 'a1 vec **)
+    answers **)
 
 let solveMatrix aadd azero aopp amul aone ainv aeqDec r c m b =
   let (p, v) = toRREF' aadd azero aopp amul ainv aeqDec r c m in
   let (p0, num) = p in
   let (l, n) = p0 in
-  let b' = rowOpsInV' aadd amul r l b in
+  let b' = rowOpsInV aadd amul r l b in
   if hasAnswers azero aeqDec r b' num
   then isRREFSolve azero aopp aone r c n b' v num (Int.succ c) ([],
          (vzero azero (Int.succ c)))
@@ -1375,11 +1369,18 @@ let solveEqGE_R =
     RbaseSymbolsImpl.coq_Ropp RbaseSymbolsImpl.coq_Rmult
     RbaseSymbolsImpl.coq_R1 RinvImpl.coq_Rinv req_Dec
 
-(** val solveMatrix_R :
+(** val solveMatrix_R_aux :
     int -> int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R
-    vec -> RbaseSymbolsImpl.coq_R vec list * RbaseSymbolsImpl.coq_R vec **)
+    vec -> RbaseSymbolsImpl.coq_R answers **)
 
-let solveMatrix_R =
+let solveMatrix_R_aux =
   solveMatrix RbaseSymbolsImpl.coq_Rplus RbaseSymbolsImpl.coq_R0
     RbaseSymbolsImpl.coq_Ropp RbaseSymbolsImpl.coq_Rmult
     RbaseSymbolsImpl.coq_R1 RinvImpl.coq_Rinv req_Dec
+
+(** val solveMatrix_R :
+    int -> int -> RbaseSymbolsImpl.coq_R vec vec -> RbaseSymbolsImpl.coq_R
+    vec -> RbaseSymbolsImpl.coq_R vec **)
+
+let solveMatrix_R r c m b =
+  snd (solveMatrix_R_aux r c m b)
